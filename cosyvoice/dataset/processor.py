@@ -412,6 +412,18 @@ def padding(data, use_spk_embedding, mode='train', gan=False, dpo=False):
             speech_token = [torch.tensor(sample[i]['speech_token']) for i in order]
             batch['speech_token_len'] = torch.tensor([i.size(0) for i in speech_token], dtype=torch.int32)
             batch['speech_token'] = pad_sequence(speech_token, batch_first=True, padding_value=0)
+        if torch.tensor(['emotion_ids' in sample[i] for i in order]).all():
+            emotion_ids = [torch.tensor(sample[i]['emotion_ids']) for i in order]
+            batch['emotion_ids'] = pad_sequence(emotion_ids, batch_first=True, padding_value=0)
+        if torch.tensor(['intensity_ids' in sample[i] for i in order]).all():
+            intensity_ids = [torch.tensor(sample[i]['intensity_ids']) for i in order]
+            batch['intensity_ids'] = pad_sequence(intensity_ids, batch_first=True, padding_value=0)
+        if torch.tensor(['prompt_emotion_ids' in sample[i] for i in order]).all():
+            prompt_emotion_ids = [torch.tensor(sample[i]['prompt_emotion_ids']) for i in order]
+            batch['prompt_emotion_ids'] = pad_sequence(prompt_emotion_ids, batch_first=True, padding_value=0)
+        if torch.tensor(['prompt_intensity_ids' in sample[i] for i in order]).all():
+            prompt_intensity_ids = [torch.tensor(sample[i]['prompt_intensity_ids']) for i in order]
+            batch['prompt_intensity_ids'] = pad_sequence(prompt_intensity_ids, batch_first=True, padding_value=0)
         if gan is True:
             # in gan train, we need speech/pitch_feat
             speech = [sample[i]['speech'].squeeze(dim=0) for i in order]
@@ -429,3 +441,25 @@ def padding(data, use_spk_embedding, mode='train', gan=False, dpo=False):
         else:
             batch["embedding"] = batch["utt_embedding"]
         yield batch
+
+
+def tokenize_emo(data, get_tokenizer, allowed_special, mode='train'):
+    """情感 tokenizer: 在 tokenize 基础上调用 encode_plus 输出三元组。
+
+    扩展点：
+    - text_token: list[int]（同原 tokenize）
+    - emotion_ids: list[int]（每 token 一个 emotion ID）
+    - intensity_ids: list[int]（每 token 一个 intensity ID）
+
+    emotion_ids/intensity_ids 与 text_token 严格等长，便于后续 padding 与 FiLM 调制。
+    """
+    tokenizer = get_tokenizer()
+    for sample in data:
+        assert 'text' in sample
+        emo_result = tokenizer.encode_plus(sample['text'], allowed_special=allowed_special)
+        sample['text_token'] = emo_result['text_token'].tolist()
+        sample['emotion_ids'] = emo_result['emotion_ids'].tolist()
+        sample['intensity_ids'] = emo_result['intensity_ids'].tolist()
+        if 'instruct' in sample:
+            sample['instruct_token'] = tokenizer.encode(sample['instruct'], allowed_special=allowed_special)
+        yield sample
