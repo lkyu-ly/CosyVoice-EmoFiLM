@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 from cosyvoice.llm.llm_emotion import Qwen2LM_Emotion
+from cosyvoice.llm.emo_film import FiLMLayer, AddFusionEmotionAdapter
 
 
 class FakeQwen2Encoder(nn.Module):
@@ -165,3 +166,48 @@ def test_emo_loss_on_invalid_value_raises():
             llm=FakeQwen2Encoder(model_dim=896),
             sampling=fake_sampling, emo_loss_on="invalid_value",
         )
+
+
+# ----- emotion_adapter 注入接口（spec 12.2 w/o FiLM 消融） -----
+
+def test_default_emotion_adapter_is_film():
+    """未注入 emotion_adapter 时默认使用 FiLMLayer（与 Emo_PA 源码一致）。"""
+    model = Qwen2LM_Emotion(
+        llm_input_size=896, llm_output_size=896, speech_token_size=6561,
+        emotion_vocab_size=6, intensity_vocab_size=4,
+        llm=FakeQwen2Encoder(model_dim=896),
+        sampling=fake_sampling,
+    )
+    assert isinstance(model.emotion_adapter, FiLMLayer)
+
+
+def test_inject_add_fusion_emotion_adapter():
+    """注入 AddFusionEmotionAdapter 时 self.emotion_adapter 是注入实例。"""
+    custom_adapter = AddFusionEmotionAdapter(model_dim=896)
+    model = Qwen2LM_Emotion(
+        llm_input_size=896, llm_output_size=896, speech_token_size=6561,
+        emotion_vocab_size=6, intensity_vocab_size=4,
+        llm=FakeQwen2Encoder(model_dim=896),
+        sampling=fake_sampling,
+        emotion_adapter=custom_adapter,
+    )
+    assert isinstance(model.emotion_adapter, AddFusionEmotionAdapter)
+    assert model.emotion_adapter is custom_adapter  # 同一实例引用
+
+
+def test_inject_add_fusion_forward_runs():
+    """注入 AddFusion 后 forward 仍可正常运行（无 shape 错误）。"""
+    custom_adapter = AddFusionEmotionAdapter(model_dim=896)
+    model = Qwen2LM_Emotion(
+        llm_input_size=896, llm_output_size=896, speech_token_size=6561,
+        emotion_vocab_size=6, intensity_vocab_size=4,
+        llm=FakeQwen2Encoder(model_dim=896),
+        sampling=fake_sampling,
+        emotion_adapter=custom_adapter,
+    )
+    model.eval()
+    batch = make_fake_batch()
+    with torch.no_grad():
+        out = model(batch, torch.device("cpu"))
+    assert not out["loss"].isnan()
+    assert not out["loss_emotion"].isnan()

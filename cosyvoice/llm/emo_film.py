@@ -33,3 +33,17 @@ class FiLMLayer(nn.Module):
         gamma_beta = self.projection(emotion_features)
         gamma, beta = torch.chunk(gamma_beta, 2, dim=-1)
         return gamma * text_features + beta
+
+
+class AddFusionEmotionAdapter(nn.Module):
+    """消融对比用：x + projection(emotion_features) 简单加法（替代 FiLMLayer 的 gamma*x+beta）。
+
+    用于 spec 12.2 / 附录 C 的 w/o FiLM Layer 消融实验（论文 DTW=73.96）。
+    projection 提供可学习缩放，让消融对照更公平（不是裸 emotion_features 相加）。
+    """
+    def __init__(self, model_dim: int):
+        super().__init__()
+        self.projection = nn.Linear(model_dim, model_dim)
+
+    def forward(self, text_features: torch.Tensor, emotion_features: torch.Tensor) -> torch.Tensor:
+        return text_features + self.projection(emotion_features)

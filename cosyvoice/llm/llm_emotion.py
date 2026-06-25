@@ -9,6 +9,7 @@ import torch.nn as nn
 from cosyvoice.llm.llm import Qwen2LM
 from cosyvoice.llm.emo_film import EmotionEncoder, FiLMLayer
 from cosyvoice.utils.common import IGNORE_ID, th_accuracy
+# 注：AddFusionEmotionAdapter 不在此处 import，通过 yaml !new 构造后由 emotion_adapter 参数注入
 
 
 class Qwen2LM_Emotion(Qwen2LM):
@@ -28,6 +29,7 @@ class Qwen2LM_Emotion(Qwen2LM):
         emo_loss_weight: float = 0.2,
         emo_loss_on: str = "modulated_text_emb",
         alpha: float = 0.05,
+        emotion_adapter: Optional[nn.Module] = None,
     ):
         # 调用父类 __init__（llm.py:258-268 兼容 8 参数签名）
         super().__init__(
@@ -42,7 +44,9 @@ class Qwen2LM_Emotion(Qwen2LM):
         )
 
         self.emotion_encoder = EmotionEncoder(emotion_vocab_size, intensity_vocab_size, llm_input_size)
-        self.emotion_adapter = FiLMLayer(llm_input_size)
+        # emotion_adapter 可注入：默认 None → FiLMLayer（与 Emo_PA 源码 llm_emo.py:171 一致）
+        # ablation_no_film.yaml 通过 yaml !new:AddFusionEmotionAdapter 注入以实现 w/o FiLM 消融
+        self.emotion_adapter = emotion_adapter if emotion_adapter is not None else FiLMLayer(llm_input_size)
         self.emotion_classifier = nn.Linear(llm_input_size, emotion_vocab_size)
         self.criterion_emotion_cls = nn.CrossEntropyLoss(ignore_index=0)
         self.emo_loss_weight = emo_loss_weight

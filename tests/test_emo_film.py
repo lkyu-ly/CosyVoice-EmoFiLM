@@ -1,6 +1,6 @@
-"""FiLMLayer + EmotionEncoder 单测。"""
+"""FiLMLayer + EmotionEncoder + AddFusionEmotionAdapter 单测。"""
 import torch
-from cosyvoice.llm.emo_film import EmotionEncoder, FiLMLayer
+from cosyvoice.llm.emo_film import EmotionEncoder, FiLMLayer, AddFusionEmotionAdapter
 
 
 def test_emotion_encoder_shape():
@@ -51,3 +51,36 @@ def test_film_gradient_to_both_inputs():
     assert x.grad is not None
     assert e.grad is not None
     assert not torch.allclose(x.grad, torch.zeros_like(x.grad))
+
+
+# ----- AddFusionEmotionAdapter 消融对照 -----
+
+def test_add_fusion_shape_preserved():
+    """AddFusion 输出 shape 与 FiLMLayer 一致。"""
+    adapter = AddFusionEmotionAdapter(model_dim=896)
+    x = torch.randn(2, 15, 896)
+    e = torch.randn(2, 15, 896)
+    out = adapter(x, e)
+    assert out.shape == (2, 15, 896)
+
+
+def test_add_fusion_forward_equation():
+    """AddFusion 前向严格等于 text_features + projection(emotion_features)。"""
+    adapter = AddFusionEmotionAdapter(model_dim=896)
+    # 冻结 projection 权重以便手动复算
+    x = torch.randn(2, 8, 896)
+    e = torch.randn(2, 8, 896)
+    with torch.no_grad():
+        expected = x + adapter.projection(e)
+    out = adapter(x, e)
+    torch.testing.assert_close(out, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_add_fusion_not_identity_at_init():
+    """AddFusion 初始化即非恒等（与 FiLM 恒等初始化对比，证明消融对照有效）。"""
+    adapter = AddFusionEmotionAdapter(model_dim=896)
+    x = torch.randn(2, 5, 896)
+    e = torch.randn(2, 5, 896)
+    out = adapter(x, e)
+    # 默认 Linear 初始化非零，故 out != x（极大概率）
+    assert not torch.allclose(out, x, atol=1e-5, rtol=1e-5)

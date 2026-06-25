@@ -36,6 +36,7 @@ data
 raw_wav
 tensorboard
 **/*build*
+!tools/build_fedd.py
 
 # Clangd files
 .cache
@@ -50,6 +51,7 @@ pretrained_models/*
 *_pb2_grpc.py
 *_pb2.py
 *.tar
+!asset/*
 
 # ===== Emo-FiLM 复现补充（2026-06-25）=====
 # 模型权重 / 训练产物
