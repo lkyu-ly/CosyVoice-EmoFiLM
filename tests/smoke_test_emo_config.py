@@ -2,7 +2,7 @@
 import os
 import sys
 
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 sys.path.insert(0, os.path.join(ROOT, "third_party", "Matcha-TTS"))
 from hyperpyyaml import load_hyperpyyaml
 

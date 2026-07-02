@@ -1,9 +1,10 @@
 """Emo-FiLM 推理 fake 单测。"""
 import os
 import sys
+
 import torch
 
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 sys.path.insert(0, os.path.join(ROOT, "third_party", "Matcha-TTS"))
 from cosyvoice.cli.frontend_emo import CosyVoiceFrontEnd_Emotion
 
@@ -47,6 +48,7 @@ def test_prompt_emotion_defaults_neu_low():
 def test_model_emo_llm_job_runs():
     """验证 CosyVoice2Model_Emotion 可实例化且 tts 签名匹配。"""
     from cosyvoice.cli.model_emo import CosyVoice2Model_Emotion
+
     # 真实测试需要完整的模型加载，此处仅做 import + class 定义检查
     assert CosyVoice2Model_Emotion is not None
     assert hasattr(CosyVoice2Model_Emotion, 'tts')

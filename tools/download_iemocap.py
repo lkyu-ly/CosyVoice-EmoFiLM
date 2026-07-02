@@ -16,12 +16,12 @@ import csv
 import io
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
 import pyarrow.parquet as pq
 import soundfile as sf
+from huggingface_hub import snapshot_download
 
 REPO_ID = "AbstractTTS/IEMOCAP"
-OUT_DIR = Path("/home/lkyu/LLM-Audio/datasets/IEMOCAP")
+OUT_DIR = Path("/home/hanlvyuan/LLM-Audio/datasets/IEMOCAP")
 WAV_DIR = OUT_DIR / "wav"
 HF_CACHE = OUT_DIR / "_hf_parquet"  # parquet 原始缓存，可手动删除
 

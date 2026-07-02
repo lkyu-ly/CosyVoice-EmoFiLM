@@ -1,12 +1,12 @@
 """eval 冒烟测试：用 CosyVoice2 合成2条 wav 做 ref→hyp 指标计算。"""
 import json
 import os
-import subprocess
 import shutil
+import subprocess
 import tempfile
 
-EMOFILM_PY = "/home/lkyu/miniconda3/envs/emofilm/bin/python"
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+EMOFILM_PY = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/python"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 EVAL_SCRIPT = f"{ROOT}/eval/eval_emo_film.py"
 PER_EMO_SCRIPT = f"{ROOT}/eval/per_emo_accuracy.py"
 
@@ -53,7 +53,7 @@ def test_eval_runs_and_outputs_valid_json():
     assert "dtw" in data
     assert "wer" in data
     assert "n_samples" in data
-    assert 0 <= data["emo_sim"] <= 100
+    assert 0 <= data["emo_sim"] <= 100 + 1e-2  # cos sim 浮点误差容差（emo_sim=dot*100，归一化向量 dot 理论 ≤1.0）
     assert data["dtw"] >= 0
     assert data["n_samples"] >= 1
 

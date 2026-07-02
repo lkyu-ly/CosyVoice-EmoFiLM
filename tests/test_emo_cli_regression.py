@@ -1,11 +1,11 @@
 """原 CosyVoice2 zero-shot smoke 回归 + 硬编码路径检查。"""
 import os
 import subprocess
+
 import pytest
 
-
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
-EMOFILM_PY = "/home/lkyu/miniconda3/envs/emofilm/bin/python"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
+EMOFILM_PY = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/python"
 
 
 @pytest.mark.skipif(

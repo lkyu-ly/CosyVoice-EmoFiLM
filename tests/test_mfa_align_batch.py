@@ -8,12 +8,12 @@ from pathlib import Path
 
 import praatio.textgrid
 
-EMOFILM_PY = "/home/lkyu/miniconda3/envs/emofilm/bin/python"
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+EMOFILM_PY = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/python"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 SCRIPT = f"{ROOT}/tools/run_mfa_align.py"
-MFA_BIN = "/home/lkyu/miniconda3/envs/emofilm/bin/mfa"
+MFA_BIN = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/mfa"
 OUTDIR = "/tmp/test_mfa_batch"
-ESD_DIR = "/home/lkyu/LLM-Audio/datasets/ESD"
+ESD_DIR = "/home/hanlvyuan/LLM-Audio/datasets/ESD"
 
 
 def setup_module():
@@ -54,8 +54,8 @@ def make_manifest(name, wav_paths):
 def test_mfa_align_esd():
     """ESD 2条对齐验证：产出的 TextGrid 含 words tier。"""
     esd_wavs = sorted([
-        os.path.join("/home/lkyu/LLM-Audio/datasets/ESD/0011/Neutral", f)
-        for f in os.listdir("/home/lkyu/LLM-Audio/datasets/ESD/0011/Neutral")[:2]
+        os.path.join("/home/hanlvyuan/LLM-Audio/datasets/ESD/0011/Neutral", f)
+        for f in os.listdir("/home/hanlvyuan/LLM-Audio/datasets/ESD/0011/Neutral")[:2]
     ])
     manifest = make_manifest("esd_2", esd_wavs)
 
@@ -82,7 +82,7 @@ def test_mfa_align_esd():
 
 def test_mfa_validate_first():
     """--validate 模式先校验 corpus 不报错。"""
-    esd_wav = os.path.join("/home/lkyu/LLM-Audio/datasets/ESD/0011/Neutral", os.listdir("/home/lkyu/LLM-Audio/datasets/ESD/0011/Neutral")[0])
+    esd_wav = os.path.join("/home/hanlvyuan/LLM-Audio/datasets/ESD/0011/Neutral", os.listdir("/home/hanlvyuan/LLM-Audio/datasets/ESD/0011/Neutral")[0])
     manifest = make_manifest("validate_test", [esd_wav])
     cmd = [
         EMOFILM_PY, SCRIPT,

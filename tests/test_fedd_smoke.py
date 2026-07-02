@@ -4,8 +4,8 @@ import os
 import shutil
 import subprocess
 
-EMOFILM_PY = "/home/lkyu/miniconda3/envs/emofilm/bin/python"
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+EMOFILM_PY = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/python"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 SCRIPT = f"{ROOT}/tools/build_fedd.py"
 OUTDIR = "/tmp/test_fedd_smoke"
 
@@ -20,7 +20,7 @@ def test_fedd_smoke_mode_runs():
     cmd = [
         EMOFILM_PY, SCRIPT,
         f"--output_dir={OUTDIR}",
-        f"--esd_dir=/home/lkyu/LLM-Audio/datasets/ESD",
+        f"--esd_dir=/home/hanlvyuan/LLM-Audio/datasets/ESD",
         "--mode=smoke",
         "--num=10",
         "--seed=42",

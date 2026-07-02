@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 import torch
 
-EMOFILM_PY = "/home/lkyu/miniconda3/envs/emofilm/bin/python"
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+EMOFILM_PY = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/python"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 SCRIPT = f"{ROOT}/tools/build_word_emo_dataset.py"
 
 # 手动构造 TextGrid + .pt feats 测试数据

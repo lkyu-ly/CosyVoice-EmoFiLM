@@ -14,8 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-
-CONDA_BASE = "/home/lkyu/miniconda3"
+CONDA_BASE = "/home/hanlvyuan/miniconda3"
 EMOFILM_BIN = os.path.join(CONDA_BASE, "envs", "emofilm", "bin")
 
 

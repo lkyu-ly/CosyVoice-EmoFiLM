@@ -1,10 +1,11 @@
 """QwenTokenizer_Emotion 单测。覆盖 spec 7.3 所有验收条件。"""
 import os
+
 import pytest
 import torch
 
 # Check that QwenTokenizer base is importable before using emotion wrapper
-TOKEN_PATH = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN"
+TOKEN_PATH = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN"
 from cosyvoice.tokenizer.emo_tokenizer import QwenTokenizer_Emotion
 
 

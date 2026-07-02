@@ -3,10 +3,11 @@ import json
 import os
 import subprocess
 import tempfile
+
 import torch
 
-EMOFILM_PY = "/home/lkyu/miniconda3/envs/emofilm/bin/python"
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+EMOFILM_PY = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/python"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 SCRIPT = f"{ROOT}/tools/train_annotator.py"
 
 

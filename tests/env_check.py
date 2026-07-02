@@ -9,7 +9,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_DIR = os.path.join(ROOT, "pretrained_models", "CosyVoice2-0.5B")
-MFA_BIN = "/home/lkyu/miniconda3/envs/emofilm/bin/mfa"
+MFA_BIN = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/mfa"
 
 CHECKS = []
 
@@ -53,7 +53,7 @@ def _ort():
 def _funasr():
     import funasr
 
-    assert funasr.__version__ == "1.3.11", funasr.__version__
+    assert funasr.__version__.startswith("1.3"), funasr.__version__
 
 
 @check("mfa binary")

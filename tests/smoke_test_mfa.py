@@ -14,7 +14,7 @@ WAV = "/tmp/smoke_en.wav"
 TEXT = "And then later on fully acquiring that company"
 CORPUS = "/tmp/mfa_smoke/corpus"
 OUTPUT = "/tmp/mfa_smoke/aligned"
-MFA_BIN = "/home/lkyu/miniconda3/envs/emofilm/bin/mfa"
+MFA_BIN = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/mfa"
 
 
 def main():
@@ -54,7 +54,7 @@ def main():
     extra_bins = [env_bin]
     # MFA also shells out to `sqlite3` (not bundled in the emofilm env).
     # Prefer a conda sqlite3 if present, fall back to system PATH.
-    for cand in ("/home/lkyu/miniconda3/bin", "/usr/bin", "/usr/local/bin"):
+    for cand in ("/home/hanlvyuan/miniconda3/bin", "/usr/bin", "/usr/local/bin"):
         if os.path.isfile(os.path.join(cand, "sqlite3")):
             extra_bins.append(cand)
             break

@@ -1,15 +1,15 @@
 """数据索引脚本单测：验证 manifest 格式与统计量。"""
 import json
 import os
+import subprocess
 import sys
 import tempfile
-import subprocess
 
-EMOFILM_PY = "/home/lkyu/miniconda3/envs/emofilm/bin/python"
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+EMOFILM_PY = "/home/hanlvyuan/miniconda3/envs/emofilm/bin/python"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 INDEX_SCRIPT = f"{ROOT}/tools/index_esd_iemocap.py"
-ESD_DIR = "/home/lkyu/LLM-Audio/datasets/ESD"
-IEMOCAP_DIR = "/home/lkyu/LLM-Audio/datasets/IEMOCAP"
+ESD_DIR = "/home/hanlvyuan/LLM-Audio/datasets/ESD"
+IEMOCAP_DIR = "/home/hanlvyuan/LLM-Audio/datasets/IEMOCAP"
 
 
 def test_esd_manifest_format():

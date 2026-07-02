@@ -1,18 +1,19 @@
 """dataset processor 扩展 tokenize_emo + padding 单测。"""
 import os
 import sys
+
 import torch
 
-ROOT = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM"
+ROOT = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM"
 sys.path.insert(0, os.path.join(ROOT, "third_party", "Matcha-TTS"))
 
-TOKEN_PATH = "/home/lkyu/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN"
+TOKEN_PATH = "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN"
 
 
 def test_tokenize_emo_output_has_emotion_fields():
     """tokenize_emo 输出含 emotion_ids/intensity_ids。"""
-    from cosyvoice.tokenizer.emo_tokenizer import get_emo_tokenizer
     from cosyvoice.dataset.processor import tokenize_emo
+    from cosyvoice.tokenizer.emo_tokenizer import get_emo_tokenizer
 
     samples = [{"text": "<emotion type='hap' intensity='high'>hello world</emotion> test"}]
 
@@ -30,8 +31,8 @@ def test_tokenize_emo_output_has_emotion_fields():
 
 def test_tokenize_emo_does_not_break_tokenize():
     """原 tokenize 函数输出不受影响。"""
-    from cosyvoice.tokenizer.emo_tokenizer import get_emo_tokenizer
     from cosyvoice.dataset.processor import tokenize, tokenize_emo
+    from cosyvoice.tokenizer.emo_tokenizer import get_emo_tokenizer
 
     samples = [{"text": "hello world"}]
 
@@ -46,8 +47,8 @@ def test_tokenize_emo_does_not_break_tokenize():
 
 def test_padding_includes_emotion_fields():
     """padding 扩展后 batch 含 emotion_ids/intensity_ids。"""
+    from cosyvoice.dataset.processor import padding, tokenize_emo
     from cosyvoice.tokenizer.emo_tokenizer import get_emo_tokenizer
-    from cosyvoice.dataset.processor import tokenize_emo, padding
 
     samples = [
         {"text": "<emotion type='ang' intensity='low'>angry</emotion>", "utt": "u1"},
