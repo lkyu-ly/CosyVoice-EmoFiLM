@@ -1,0 +1,50 @@
+{
+  "base_checkpoint": {
+    "path": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/llm.pt",
+    "sha256": "b144ef55b51ce8cfb79a73c90dbba0bdaba4e451c0ebcfab20f769264f84a608"
+  },
+  "code": {
+    "dirty": true,
+    "git_head": "5ad481dadd6b9b8516890335325558539dbae410",
+    "root": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1",
+    "worktree_diff_sha256": "592d8449d3b7ad2e570b037bfa7e112bf0c57f408620796c4ea6f56b3efdd1df"
+  },
+  "command": "torchrun cosyvoice/bin/train_emo.py --train_engine torch_ddp --model llm --config conf/emo_film.yaml --train_data /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/splits/train/parquet/data.list --cv_data /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/splits/cv/parquet/data.list --qwen_pretrain_path /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN --checkpoint /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/llm.pt --contract_dir /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1 --model_dir exp/emofilm_v1 --tensorboard_dir exp/emofilm_v1/tb --num_workers 2 --prefetch 2",
+  "contract_hash": "b5aab1428acae55bba37dcac5b5c6720b6d4c09b67d4321d3b8ccdc1db5a3e9d",
+  "contract_name": "emofilm_v1",
+  "extra": {
+    "checkpoint_role": "base",
+    "final_checkpoint": {
+      "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/final.pt",
+      "sha256": "ac213f4257c60fe6d96e7def80090af4f6d1abe316e7d89cec9032ff464c7be7"
+    },
+    "final_parameter_hash": "315dc5c65cae64b16f18770a5625a89c0f00346bb7238b6847f9b54e262edb89",
+    "parameter_hash": "f2d4c029b8bd524e7cb9055013b5786adaad210c4fa585d78ba206fe8b1a33da",
+    "resolved_config": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/resolved.yaml"
+  },
+  "hardware": {
+    "cuda": {
+      "available": true,
+      "device_count": 1,
+      "devices": [
+        "NVIDIA GeForce RTX 3090"
+      ]
+    },
+    "cuda_visible_devices": "3",
+    "torch_version": "2.13.0+cu130"
+  },
+  "packages": {
+    "HyperPyYAML": "1.2.3",
+    "fairseq": "0.12.2",
+    "numpy": "1.26.4",
+    "pyarrow": "18.1.0",
+    "timm": "1.0.28",
+    "torch": "2.13.0",
+    "torchaudio": "2.11.0",
+    "transformers": "4.51.3"
+  },
+  "python": "3.10.20 (main, Jun 11 2026, 15:17:37) [GCC 14.3.0]",
+  "run_kind": "train",
+  "schema_version": 1,
+  "seed": 1986
+}

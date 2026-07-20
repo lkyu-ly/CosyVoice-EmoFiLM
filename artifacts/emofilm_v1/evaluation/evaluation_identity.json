@@ -1,0 +1,112 @@
+{
+  "base_checkpoint": {
+    "path": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/llm.pt",
+    "sha256": "b144ef55b51ce8cfb79a73c90dbba0bdaba4e451c0ebcfab20f769264f84a608"
+  },
+  "code": {
+    "dirty": true,
+    "git_head": "5ad481dadd6b9b8516890335325558539dbae410",
+    "root": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1",
+    "worktree_diff_sha256": "592d8449d3b7ad2e570b037bfa7e112bf0c57f408620796c4ea6f56b3efdd1df"
+  },
+  "command": "cd \"/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1\"\nset -euo pipefail\n\nCUDA_VISIBLE_DEVICES=0 MODELSCOPE_OFFLINE=1 PYTHONPATH=.:third_party/Matcha-TTS \\\n/home/hanlvyuan/miniconda3/envs/emofilm/bin/python eval/eval_emo_film.py \\\n  --ref_dir exp/emofilm_v1/eval_refs/esd \\\n  --hyp_dir exp/emofilm_v1/full/esd \\\n  --ref_text_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/esd/manifest.jsonl \\\n  --output exp/emofilm_v1/eval/esd_metrics.json \\\n  --device cuda --expected_count 1500 --batch_size 16 \\\n  > exp/emofilm_v1/eval/esd.log 2>&1 &\npid_esd=$!\n\nCUDA_VISIBLE_DEVICES=1 MODELSCOPE_OFFLINE=1 PYTHONPATH=.:third_party/Matcha-TTS \\\n/home/hanlvyuan/miniconda3/envs/emofilm/bin/python eval/eval_emo_film.py \\\n  --ref_dir exp/emofilm_v1/eval_refs/fedd_a \\\n  --hyp_dir exp/emofilm_v1/full/fedd_a \\\n  --ref_text_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_a/manifest.jsonl \\\n  --output exp/emofilm_v1/eval/fedd_a_metrics.json \\\n  --device cuda --expected_count 500 --batch_size 16 \\\n  > exp/emofilm_v1/eval/fedd_a.log 2>&1 &\npid_fedd_a=$!\n\nCUDA_VISIBLE_DEVICES=2 MODELSCOPE_OFFLINE=1 PYTHONPATH=.:third_party/Matcha-TTS \\\n/home/hanlvyuan/miniconda3/envs/emofilm/bin/python eval/eval_emo_film.py \\\n  --ref_dir exp/emofilm_v1/eval_refs/fedd_b \\\n  --hyp_dir exp/emofilm_v1/full/fedd_b \\\n  --ref_text_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_b/manifest.jsonl \\\n  --output exp/emofilm_v1/eval/fedd_b_metrics.json \\\n  --device cuda --expected_count 500 --batch_size 16 \\\n  > exp/emofilm_v1/eval/fedd_b.log 2>&1 &\npid_fedd_b=$!\n\nwait \"$pid_esd\"\nwait \"$pid_fedd_a\"\nwait \"$pid_fedd_b\"\n",
+  "contract_hash": "b5aab1428acae55bba37dcac5b5c6720b6d4c09b67d4321d3b8ccdc1db5a3e9d",
+  "contract_name": "emofilm_v1",
+  "extra": {
+    "comparison": {
+      "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/eval/comparison.json",
+      "same_fixed_sample_ids": true,
+      "sha256": "71cd3e64a235d062235fd018d168b1d7c6d0b6f8c9d018d99161cc2e6aa28c1c"
+    },
+    "generation_identity": {
+      "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/full/full_generation_identity.json",
+      "sha256": "96f09ab680c4fe21054312d8112cdebeeaa423482bc156e19769c70940ec29f1"
+    },
+    "gpu_layout": {
+      "esd": 0,
+      "fedd_a": 1,
+      "fedd_b": 2
+    },
+    "metric_contract_version": "emofilm-eval-v2",
+    "models": {
+      "emotion2vec": "iic/emotion2vec_plus_large (local ModelScope cache)",
+      "whisper": "large-v3 (local cache)"
+    },
+    "results": {
+      "esd": {
+        "dtw": 48.17579369845955,
+        "dtw_euclidean": 1448.9776322131588,
+        "dtw_euclidean_normalized": 9.959637096894769,
+        "dtw_normalized": 0.33236772899447853,
+        "emo_sim": 66.74509292017326,
+        "metric_contract_version": "emofilm-eval-v2",
+        "n_samples": 1500,
+        "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/eval/esd_metrics.json",
+        "sha256": "6fc6585d6220c2b97d8ea63e45f2cbcfe771ddb486e151ccca506f75b32432ff",
+        "wer": 0.09477025012025013,
+        "wer_percent": 9.477025012025013
+      },
+      "fedd_a": {
+        "dtw": 79.25081253686263,
+        "dtw_euclidean": 3014.7693355916504,
+        "dtw_euclidean_normalized": 6.794966523071451,
+        "dtw_normalized": 0.17826778656789677,
+        "emo_sim": 81.94006955258074,
+        "metric_contract_version": "emofilm-eval-v2",
+        "n_samples": 500,
+        "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/eval/fedd_a_metrics.json",
+        "sha256": "883afee48c145e764912e083ceb10f447fe8a0c02e6e4c63828a24ec1a397a8e",
+        "wer": 0.08297483447924624,
+        "wer_percent": 8.297483447924623
+      },
+      "fedd_b": {
+        "dtw": 53.5767018062336,
+        "dtw_euclidean": 1504.204706309767,
+        "dtw_euclidean_normalized": 10.76573438088339,
+        "dtw_normalized": 0.38387669603537583,
+        "emo_sim": 61.59631899677907,
+        "metric_contract_version": "emofilm-eval-v2",
+        "n_samples": 500,
+        "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/eval/fedd_b_metrics.json",
+        "sha256": "83beb1266c50c08e8d4ed2eecf525f68fd0ce0cbc8fffd569b988be892720961",
+        "wer": 0.1442111111111111,
+        "wer_percent": 14.42111111111111
+      }
+    },
+    "trained_checkpoint": {
+      "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/final.pt",
+      "role": "final",
+      "sha256": "ac213f4257c60fe6d96e7def80090af4f6d1abe316e7d89cec9032ff464c7be7"
+    }
+  },
+  "hardware": {
+    "cuda": {
+      "available": true,
+      "device_count": 6,
+      "devices": [
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090"
+      ]
+    },
+    "cuda_visible_devices": null,
+    "torch_version": "2.13.0+cu130"
+  },
+  "packages": {
+    "HyperPyYAML": "1.2.3",
+    "fairseq": "0.12.2",
+    "numpy": "1.26.4",
+    "pyarrow": "18.1.0",
+    "timm": "1.0.28",
+    "torch": "2.13.0",
+    "torchaudio": "2.11.0",
+    "transformers": "4.51.3"
+  },
+  "python": "3.10.20 (main, Jun 11 2026, 15:17:37) [GCC 14.3.0]",
+  "run_kind": "evaluate",
+  "schema_version": 1,
+  "seed": 1986
+}

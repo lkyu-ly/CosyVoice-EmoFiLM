@@ -1,0 +1,137 @@
+{
+  "baselines": {
+    "local_final": {
+      "partitions": {
+        "esd": {
+          "delta_current_minus_baseline": {
+            "dtw_normalized": -0.11584424582469316,
+            "emo_sim": 11.615036707382117,
+            "wer": -0.18340435305435304,
+            "wer_percentage_points": -18.340435305435303
+          },
+          "metrics": {
+            "dtw_normalized": 0.4482119748191717,
+            "emo_sim": 55.130056212791146,
+            "wer": 0.2781746031746032,
+            "wer_percent": 27.817460317460316
+          }
+        },
+        "fedd_a": {
+          "delta_current_minus_baseline": {
+            "dtw_normalized": 0.020087544611254754,
+            "emo_sim": -2.0820372013535007,
+            "wer": -0.0776342012562601,
+            "wer_percentage_points": -7.763420125626009
+          },
+          "metrics": {
+            "dtw_normalized": 0.15818024195664201,
+            "emo_sim": 84.02210675393424,
+            "wer": 0.16060903573550633,
+            "wer_percent": 16.060903573550632
+          }
+        },
+        "fedd_b": {
+          "delta_current_minus_baseline": {
+            "dtw_normalized": -0.023976092416301942,
+            "emo_sim": 2.4216162872818003,
+            "wer": -0.21974098124098126,
+            "wer_percentage_points": -21.974098124098127
+          },
+          "metrics": {
+            "dtw_normalized": 0.4078527884516778,
+            "emo_sim": 59.17470270949727,
+            "wer": 0.36395209235209236,
+            "wer_percent": 36.39520923520924
+          }
+        }
+      },
+      "path": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/exp/diagnostics/20260716-author-control-v6/local_final/local_deterministic/full/metrics_aggregate.json",
+      "sha256": "e95c052c832a5bff7f0fd23e7c43fe7f0e0445e20d849f04faa19cfa7670456d"
+    },
+    "local_identity": {
+      "partitions": {
+        "esd": {
+          "delta_current_minus_baseline": {
+            "dtw_normalized": -0.15542205867845788,
+            "emo_sim": 15.55076574767174,
+            "wer": 0.03130149110149111,
+            "wer_percentage_points": 3.1301491101491106
+          },
+          "metrics": {
+            "dtw_normalized": 0.4877897876729364,
+            "emo_sim": 51.194327172501524,
+            "wer": 0.06346875901875902,
+            "wer_percent": 6.346875901875903
+          }
+        },
+        "fedd_a": {
+          "delta_current_minus_baseline": {
+            "dtw_normalized": 0.011205449349875302,
+            "emo_sim": -1.1288915535304227,
+            "wer": 0.06880673868615045,
+            "wer_percentage_points": 6.880673868615045
+          },
+          "metrics": {
+            "dtw_normalized": 0.16706233721802147,
+            "emo_sim": 83.06896110611116,
+            "wer": 0.014168095793095793,
+            "wer_percent": 1.4168095793095792
+          }
+        },
+        "fedd_b": {
+          "delta_current_minus_baseline": {
+            "dtw_normalized": -0.08155163492164091,
+            "emo_sim": 8.161551365935594,
+            "wer": 0.02114559884559883,
+            "wer_percentage_points": 2.114559884559883
+          },
+          "metrics": {
+            "dtw_normalized": 0.46542833095701674,
+            "emo_sim": 53.434767630843474,
+            "wer": 0.12306551226551227,
+            "wer_percent": 12.306551226551226
+          }
+        }
+      },
+      "path": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/exp/diagnostics/20260716-author-control-v6/local_identity/local_deterministic/full/metrics_aggregate.json",
+      "sha256": "1bfd7f9380175f476b1fae97d2f2373a9833db2035bcb94f598190eb0b9c7d91"
+    }
+  },
+  "current": {
+    "esd": {
+      "dtw": 48.17579369845955,
+      "dtw_euclidean": 1448.9776322131588,
+      "dtw_euclidean_normalized": 9.959637096894769,
+      "dtw_normalized": 0.33236772899447853,
+      "emo_sim": 66.74509292017326,
+      "metric_contract_version": "emofilm-eval-v2",
+      "n_samples": 1500,
+      "wer": 0.09477025012025013,
+      "wer_percent": 9.477025012025013
+    },
+    "fedd_a": {
+      "dtw": 79.25081253686263,
+      "dtw_euclidean": 3014.7693355916504,
+      "dtw_euclidean_normalized": 6.794966523071451,
+      "dtw_normalized": 0.17826778656789677,
+      "emo_sim": 81.94006955258074,
+      "metric_contract_version": "emofilm-eval-v2",
+      "n_samples": 500,
+      "wer": 0.08297483447924624,
+      "wer_percent": 8.297483447924623
+    },
+    "fedd_b": {
+      "dtw": 53.5767018062336,
+      "dtw_euclidean": 1504.204706309767,
+      "dtw_euclidean_normalized": 10.76573438088339,
+      "dtw_normalized": 0.38387669603537583,
+      "emo_sim": 61.59631899677907,
+      "metric_contract_version": "emofilm-eval-v2",
+      "n_samples": 500,
+      "wer": 0.1442111111111111,
+      "wer_percent": 14.42111111111111
+    }
+  },
+  "metric_contract_version": "emofilm-eval-v2",
+  "same_fixed_sample_ids": true
+}

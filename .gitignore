@@ -1,0 +1,81 @@
+# Python and test caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and operating-system metadata
+.vscode/
+.vs/
+.idea/
+.settings/
+*.*project
+*.sublime-workspace
+*.sublime-project
+*.sw?
+*~
+.DS_Store
+.ipynb_checkpoints/
+
+# Build and environment state
+*.egg-info/
+*.egg-link
+build/
+dist/
+.eggs/
+.env
+.env.local
+*.secret
+
+# Logs and generated run directories
+*.log
+logs/
+tensorboard/
+outputs/
+runs/
+wandb/
+mlruns/
+results/
+raw_wav/
+*_manifests/
+
+# Repository-local large assets
+/datasets/
+/pretrained_models/
+/checkpoints/
+/exp/
+/emofilm_original/
+/reference/
+
+# Large binary members of the versioned EmoFiLM contract.
+# JSON/JSONL/list/scp/text/utt2spk and other text metadata remain trackable.
+/data/contracts/emofilm_v1/**/*.pt
+/data/contracts/emofilm_v1/**/*.pth
+/data/contracts/emofilm_v1/**/*.ckpt
+/data/contracts/emofilm_v1/**/*.wav
+/data/contracts/emofilm_v1/**/*.flac
+/data/contracts/emofilm_v1/**/*.TextGrid
+/data/contracts/emofilm_v1/**/*.tar
+/data/contracts/emofilm_v1/**/*.parquet
+/data/contracts/emofilm_v1/**/alignment_analysis.csv
+
+# Generated/native model binaries outside the contract.
+*.bin
+*.safetensors
+*.onnx
+*.gguf
+*.fla
+
+# Keep the curated experiment summary tracked.
+!/artifacts/
+!/artifacts/emofilm_v1/
+!/artifacts/emofilm_v1/**
+
+# Local agent state
+.serena/
+.scratch/
+.superpowers/
+*.bak
+*.tmp.superpowers/

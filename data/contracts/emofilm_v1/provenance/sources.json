@@ -1,0 +1,22 @@
+[
+  {
+    "count": 6987,
+    "dataset": "iemocap",
+    "manifest": "sources/iemocap/manifest.jsonl"
+  },
+  {
+    "count": 15127,
+    "dataset": "esd",
+    "manifest": "sources/esd/manifest.jsonl"
+  },
+  {
+    "count": 500,
+    "dataset": "fedd_rebuilt",
+    "manifest": "sources/fedd/manifest/part_a.jsonl"
+  },
+  {
+    "count": 500,
+    "dataset": "fedd_rebuilt",
+    "manifest": "sources/fedd/manifest/part_b.jsonl"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "active_cv_count": 1092,
+  "active_train_count": 20774,
+  "active_union_count": 21866,
+  "contract_name": "emofilm_v1",
+  "eval_counts": {
+    "esd": 1500,
+    "fedd_a": 500,
+    "fedd_b": 500
+  },
+  "frozen_cv_count": 1098,
+  "frozen_train_count": 20870,
+  "frozen_union_count": 21968,
+  "path_base": "workspace_root",
+  "project_root": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM",
+  "rejected_count": 102,
+  "schema_version": 1,
+  "workspace_root": "/home/hanlvyuan/LLM-Audio"
+}

@@ -1,0 +1,119 @@
+{
+  "base_checkpoint": {
+    "path": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/llm.pt",
+    "sha256": "b144ef55b51ce8cfb79a73c90dbba0bdaba4e451c0ebcfab20f769264f84a608"
+  },
+  "code": {
+    "dirty": true,
+    "git_head": "5ad481dadd6b9b8516890335325558539dbae410",
+    "root": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1",
+    "worktree_diff_sha256": "592d8449d3b7ad2e570b037bfa7e112bf0c57f408620796c4ea6f56b3efdd1df"
+  },
+  "command": "cd \"/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1\"\nset -euo pipefail\n\n# 2026-07-19: ESD single-GPU run stopped after 134 WAVs when GPUs 0-2 became available.\n# Resume all fixed manifests with four deterministic shards and reuse existing WAVs.\nfor split in esd fedd_a fedd_b; do\n  case \"$split\" in\n    esd) manifest=/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/esd/manifest.jsonl ;;\n    fedd_a) manifest=/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_a/manifest.jsonl ;;\n    fedd_b) manifest=/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_b/manifest.jsonl ;;\n  esac\n  pids=()\n  for shard in 0 1 2 3; do\n    CUDA_VISIBLE_DEVICES=\"$shard\" PYTHONPATH=.:third_party/Matcha-TTS \\\n    /home/hanlvyuan/miniconda3/envs/emofilm/bin/python tools/inference_emo_film.py \\\n      --model_dir /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B \\\n      --llm_ckpt exp/emofilm_v1/final.pt \\\n      --test_manifest \"$manifest\" \\\n      --esd_root /home/hanlvyuan/LLM-Audio/datasets/ESD \\\n      --workspace_root /home/hanlvyuan/LLM-Audio \\\n      --output_dir \"exp/emofilm_v1/full/$split\" \\\n      --device cuda --fp16 --shard_idx \"$shard\" --num_shards 4 \\\n      --skip_existing --save_every 50 \\\n      > \"exp/emofilm_v1/full/${split}.shard${shard}.log\" 2>&1 &\n    pids+=(\"$!\")\n  done\n  for pid in \"${pids[@]}\"; do\n    wait \"$pid\"\n  done\n  SPLIT=\"$split\" /home/hanlvyuan/miniconda3/envs/emofilm/bin/python - <<'PY'\nimport json\nimport os\nfrom pathlib import Path\n\nroot = Path(\"exp/emofilm_v1/full\")\nsplit = os.environ[\"SPLIT\"]\nmerged = {}\nfor shard in range(4):\n    path = root / f\"inference_{split}.shard{shard}.jsonl\"\n    for line in path.read_text(encoding=\"utf-8\").splitlines():\n        if line.strip():\n            row = json.loads(line)\n            merged[row[\"utt_id\"]] = row\nexpected = {\"esd\": 1500, \"fedd_a\": 500, \"fedd_b\": 500}[split]\nif len(merged) != expected:\n    raise RuntimeError(f\"{split}: expected {expected}, got {len(merged)}\")\noutput = root / f\"inference_{split}.jsonl\"\ntemporary = output.with_suffix(\".tmp\")\ntemporary.write_text(\n    \"\".join(json.dumps(row, ensure_ascii=False) + \"\\n\" for row in merged.values()),\n    encoding=\"utf-8\",\n)\ntemporary.replace(output)\nprint(f\"merged {split}: {len(merged)}\")\nPY\ndone\n",
+  "contract_hash": "b5aab1428acae55bba37dcac5b5c6720b6d4c09b67d4321d3b8ccdc1db5a3e9d",
+  "contract_name": "emofilm_v1",
+  "extra": {
+    "fp16": true,
+    "gpu_layout": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "num_shards": 4,
+    "partitions": {
+      "esd": {
+        "count": 1500,
+        "duration_seconds": {
+          "max": 6.2,
+          "min": 1.24,
+          "total": 4078.7599999999966
+        },
+        "output_manifest": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/full/inference_esd.jsonl",
+        "output_manifest_sha256": "f8e17ceea505798e5b5d0dcc03b8dd6e84581253b91279f2b9b0e072e6f49795",
+        "source_manifest": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/esd/manifest.jsonl",
+        "source_manifest_sha256": "e1eb3c22e829eab343e63bde5e08ad5cf0e643d4a330976dd61f67376992748b",
+        "status_counts": {
+          "skipped_existing": 134,
+          "success": 1366
+        },
+        "utt_id_set_sha256": "eb7dca2378f4c5515a6b021921c0245bac684e5a866b8bab7d4e45730cf4082e",
+        "wav_set_sha256": "db96b74b489a32f29808da6ff6006579258b6bda441e883af637dd4b1a8bb92f"
+      },
+      "fedd_a": {
+        "count": 500,
+        "duration_seconds": {
+          "max": 8.0,
+          "min": 3.24,
+          "total": 2743.6399999999994
+        },
+        "output_manifest": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/full/inference_fedd_a.jsonl",
+        "output_manifest_sha256": "b8b14c4a565a37a16abe217ef40607c07449ce74ab36d08ea320368447d9aed4",
+        "source_manifest": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_a/manifest.jsonl",
+        "source_manifest_sha256": "485dcd43e568e477143461f1b7038ee6c7f444e351a52073c4d11960b87a65fd",
+        "status_counts": {
+          "success": 500
+        },
+        "utt_id_set_sha256": "baf9a1c27dc0efa436a56d44b415e1a9dc510b7658844359bd38d8473ef6f56d",
+        "wav_set_sha256": "39ca528fd0494ddca7c9f46310ba46d2002fc4df252a40f7b99baa7a6057c34b"
+      },
+      "fedd_b": {
+        "count": 500,
+        "duration_seconds": {
+          "max": 5.88,
+          "min": 1.32,
+          "total": 1348.3999999999992
+        },
+        "output_manifest": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/full/inference_fedd_b.jsonl",
+        "output_manifest_sha256": "95cd2ee9c8cac3299f6542dbd95007429fe9b421e3dc7051478a80d0b6d62812",
+        "source_manifest": "/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_b/manifest.jsonl",
+        "source_manifest_sha256": "da5b3ae4f87a12980a3f2ac6136c97d0174765c6aa21285c7650f2db18d2fb9d",
+        "status_counts": {
+          "success": 500
+        },
+        "utt_id_set_sha256": "718ca9da9d01dff666ece9f4733cc1be963d84aa5421fa36f1432c0ecab2156b",
+        "wav_set_sha256": "4bf90363c2f77bbd83eb20e3cca89d0063ec008623ac7434908d51f70dfb6ec9"
+      }
+    },
+    "resume": {
+      "esd_existing_wavs_before_four_gpu_resume": 134,
+      "skip_existing": true
+    },
+    "technical_status": "pass",
+    "trained_checkpoint": {
+      "path": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/final.pt",
+      "role": "final",
+      "sha256": "ac213f4257c60fe6d96e7def80090af4f6d1abe316e7d89cec9032ff464c7be7"
+    }
+  },
+  "hardware": {
+    "cuda": {
+      "available": true,
+      "device_count": 6,
+      "devices": [
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090",
+        "NVIDIA GeForce RTX 3090"
+      ]
+    },
+    "cuda_visible_devices": null,
+    "torch_version": "2.13.0+cu130"
+  },
+  "packages": {
+    "HyperPyYAML": "1.2.3",
+    "fairseq": "0.12.2",
+    "numpy": "1.26.4",
+    "pyarrow": "18.1.0",
+    "timm": "1.0.28",
+    "torch": "2.13.0",
+    "torchaudio": "2.11.0",
+    "transformers": "4.51.3"
+  },
+  "python": "3.10.20 (main, Jun 11 2026, 15:17:37) [GCC 14.3.0]",
+  "run_kind": "generate",
+  "schema_version": 1,
+  "seed": 1986
+}

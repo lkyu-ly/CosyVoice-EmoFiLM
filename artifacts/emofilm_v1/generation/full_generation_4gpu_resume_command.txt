@@ -1,0 +1,56 @@
+cd "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1"
+set -euo pipefail
+
+# 2026-07-19: ESD single-GPU run stopped after 134 WAVs when GPUs 0-2 became available.
+# Resume all fixed manifests with four deterministic shards and reuse existing WAVs.
+for split in esd fedd_a fedd_b; do
+  case "$split" in
+    esd) manifest=/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/esd/manifest.jsonl ;;
+    fedd_a) manifest=/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_a/manifest.jsonl ;;
+    fedd_b) manifest=/home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_b/manifest.jsonl ;;
+  esac
+  pids=()
+  for shard in 0 1 2 3; do
+    CUDA_VISIBLE_DEVICES="$shard" PYTHONPATH=.:third_party/Matcha-TTS \
+    /home/hanlvyuan/miniconda3/envs/emofilm/bin/python tools/inference_emo_film.py \
+      --model_dir /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B \
+      --llm_ckpt exp/emofilm_v1/final.pt \
+      --test_manifest "$manifest" \
+      --esd_root /home/hanlvyuan/LLM-Audio/datasets/ESD \
+      --workspace_root /home/hanlvyuan/LLM-Audio \
+      --output_dir "exp/emofilm_v1/full/$split" \
+      --device cuda --fp16 --shard_idx "$shard" --num_shards 4 \
+      --skip_existing --save_every 50 \
+      > "exp/emofilm_v1/full/${split}.shard${shard}.log" 2>&1 &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid"
+  done
+  SPLIT="$split" /home/hanlvyuan/miniconda3/envs/emofilm/bin/python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+root = Path("exp/emofilm_v1/full")
+split = os.environ["SPLIT"]
+merged = {}
+for shard in range(4):
+    path = root / f"inference_{split}.shard{shard}.jsonl"
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            merged[row["utt_id"]] = row
+expected = {"esd": 1500, "fedd_a": 500, "fedd_b": 500}[split]
+if len(merged) != expected:
+    raise RuntimeError(f"{split}: expected {expected}, got {len(merged)}")
+output = root / f"inference_{split}.jsonl"
+temporary = output.with_suffix(".tmp")
+temporary.write_text(
+    "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in merged.values()),
+    encoding="utf-8",
+)
+temporary.replace(output)
+print(f"merged {split}: {len(merged)}")
+PY
+done

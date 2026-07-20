@@ -1,0 +1,24 @@
+{
+  "checkpoint": "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1/exp/emofilm_v1/final.pt",
+  "checkpoint_epoch": 4,
+  "checkpoint_sha256": "ac213f4257c60fe6d96e7def80090af4f6d1abe316e7d89cec9032ff464c7be7",
+  "checkpoint_step": 12985,
+  "data_loader_workers": 2,
+  "device": "NVIDIA GeForce RTX 3090",
+  "finite_forward": {
+    "cv": {
+      "acc": 0.08064515888690948,
+      "loss": 5.448479175567627,
+      "loss_emotion": 0.10716786235570908,
+      "loss_tts": 5.427045822143555
+    },
+    "train": {
+      "acc": 0.27210885286331177,
+      "loss": 2.6047658920288086,
+      "loss_emotion": 0.12528908252716064,
+      "loss_tts": 2.5797080993652344
+    }
+  },
+  "status": "pass",
+  "strict_load": true
+}

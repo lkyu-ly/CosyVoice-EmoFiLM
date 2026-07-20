@@ -1,0 +1,73 @@
+{
+  "contract_name": "emofilm_v1",
+  "cv": {
+    "data_list_entries": [
+      "cv_parquet_000000000.tar",
+      "cv_parquet_000000001.tar"
+    ],
+    "data_list_sha256": "bd06dc397078f1c5c8a281fa1bc0e02ce95abd7ebe50b3d2c985f80faeb4c9d9",
+    "row_count": 1092,
+    "schema_columns": [
+      "utt",
+      "audio_data",
+      "wav",
+      "text",
+      "spk",
+      "utt_embedding",
+      "spk_embedding",
+      "speech_token"
+    ],
+    "shard_bytes": 109612608,
+    "shard_count": 2
+  },
+  "cv_count": 1092,
+  "cv_id_sha256": "a6bd3a0ccb09d852ee1ec6e78e9be6889f5cc5bc116cbfc98ced297c727e22b8",
+  "parquet": {
+    "cv_rows": 1092,
+    "shared_shards": [],
+    "train_rows": 20774
+  },
+  "train": {
+    "data_list_entries": [
+      "train_parquet_000000000.tar",
+      "train_parquet_000000001.tar",
+      "train_parquet_000000002.tar",
+      "train_parquet_000000003.tar",
+      "train_parquet_000000004.tar",
+      "train_parquet_000000005.tar",
+      "train_parquet_000000006.tar",
+      "train_parquet_000000007.tar",
+      "train_parquet_000000008.tar",
+      "train_parquet_000000009.tar",
+      "train_parquet_000000010.tar",
+      "train_parquet_000000011.tar",
+      "train_parquet_000000012.tar",
+      "train_parquet_000000013.tar",
+      "train_parquet_000000014.tar",
+      "train_parquet_000000015.tar",
+      "train_parquet_000000016.tar",
+      "train_parquet_000000017.tar",
+      "train_parquet_000000018.tar",
+      "train_parquet_000000019.tar",
+      "train_parquet_000000020.tar"
+    ],
+    "data_list_sha256": "dd62412668806757abbc1dc28c0bb47ce24222c53434504edf70088c0803b327",
+    "row_count": 20774,
+    "schema_columns": [
+      "utt",
+      "audio_data",
+      "wav",
+      "text",
+      "spk",
+      "utt_embedding",
+      "spk_embedding",
+      "speech_token"
+    ],
+    "shard_bytes": 2129559687,
+    "shard_count": 21
+  },
+  "train_count": 20774,
+  "train_id_sha256": "e344df44233d13d08783486261e485b1a342cc5446ce2cf799bcf0601b0d6bc7",
+  "union_count": 21866,
+  "union_id_sha256": "6d5d12ba220d96222a7637edc2666a2694fd78f8fa435385501ce2fed2d24520"
+}

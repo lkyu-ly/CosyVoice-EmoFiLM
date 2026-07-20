@@ -1,0 +1,23 @@
+{
+  "schema": "emofilm-v1-canonical-path-mapping-v1",
+  "assets": [
+    {"role": "training command", "historical_path": "exp/emofilm_v1/training_command.txt", "canonical_path": "artifacts/emofilm_v1/train/training_command.txt"},
+    {"role": "training identity", "historical_path": "exp/emofilm_v1/train_identity.json", "canonical_path": "artifacts/emofilm_v1/train/train_identity.json"},
+    {"role": "initial resolved configuration", "historical_path": "exp/emofilm_v1/init.yaml", "canonical_path": "artifacts/emofilm_v1/train/init.yaml"},
+    {"role": "final resolved configuration", "historical_path": "exp/emofilm_v1/resolved.yaml", "canonical_path": "artifacts/emofilm_v1/train/resolved.yaml"},
+    {"role": "full generation command", "historical_path": "exp/emofilm_v1/full/full_generation_command.txt", "canonical_path": "artifacts/emofilm_v1/generation/full_generation_command.txt"},
+    {"role": "four-GPU resume generation command", "historical_path": "exp/emofilm_v1/full/full_generation_4gpu_resume_command.txt", "canonical_path": "artifacts/emofilm_v1/generation/full_generation_4gpu_resume_command.txt"},
+    {"role": "full generation identity", "historical_path": "exp/emofilm_v1/full/full_generation_identity.json", "canonical_path": "artifacts/emofilm_v1/generation/full_generation_identity.json"},
+    {"role": "merged ESD generation manifest", "historical_path": "exp/emofilm_v1/full/inference_esd.jsonl", "canonical_path": "artifacts/emofilm_v1/generation/inference_esd.jsonl"},
+    {"role": "merged FEDD-A generation manifest", "historical_path": "exp/emofilm_v1/full/inference_fedd_a.jsonl", "canonical_path": "artifacts/emofilm_v1/generation/inference_fedd_a.jsonl"},
+    {"role": "merged FEDD-B generation manifest", "historical_path": "exp/emofilm_v1/full/inference_fedd_b.jsonl", "canonical_path": "artifacts/emofilm_v1/generation/inference_fedd_b.jsonl"},
+    {"role": "evaluation command", "historical_path": "exp/emofilm_v1/eval/evaluation_command.txt", "canonical_path": "artifacts/emofilm_v1/evaluation/evaluation_command.txt"},
+    {"role": "evaluation identity", "historical_path": "exp/emofilm_v1/eval/evaluation_identity.json", "canonical_path": "artifacts/emofilm_v1/evaluation/evaluation_identity.json"},
+    {"role": "ESD aggregate metrics", "historical_path": "exp/emofilm_v1/eval/esd_metrics.json", "canonical_path": "artifacts/emofilm_v1/evaluation/esd_metrics.json"},
+    {"role": "FEDD-A aggregate metrics", "historical_path": "exp/emofilm_v1/eval/fedd_a_metrics.json", "canonical_path": "artifacts/emofilm_v1/evaluation/fedd_a_metrics.json"},
+    {"role": "FEDD-B aggregate metrics", "historical_path": "exp/emofilm_v1/eval/fedd_b_metrics.json", "canonical_path": "artifacts/emofilm_v1/evaluation/fedd_b_metrics.json"},
+    {"role": "baseline comparison", "historical_path": "exp/emofilm_v1/eval/comparison.json", "canonical_path": "artifacts/emofilm_v1/evaluation/comparison.json"},
+    {"role": "final verification", "historical_path": "exp/emofilm_v1/final_verification.json", "canonical_path": "artifacts/emofilm_v1/final_verification.json"},
+    {"role": "experiment report", "historical_path": "exp/emofilm_v1/experiment_report.md", "canonical_path": "artifacts/emofilm_v1/experiment_report.md"}
+  ]
+}

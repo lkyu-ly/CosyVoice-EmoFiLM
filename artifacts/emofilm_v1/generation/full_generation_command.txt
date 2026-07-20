@@ -1,0 +1,30 @@
+cd "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1"
+CUDA_VISIBLE_DEVICES=3 PYTHONPATH=.:third_party/Matcha-TTS \
+/home/hanlvyuan/miniconda3/envs/emofilm/bin/python tools/inference_emo_film.py \
+  --model_dir /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B \
+  --llm_ckpt exp/emofilm_v1/final.pt \
+  --test_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/esd/manifest.jsonl \
+  --esd_root /home/hanlvyuan/LLM-Audio/datasets/ESD \
+  --workspace_root /home/hanlvyuan/LLM-Audio \
+  --output_dir exp/emofilm_v1/full/esd \
+  --device cuda --fp16 --save_every 50
+
+CUDA_VISIBLE_DEVICES=3 PYTHONPATH=.:third_party/Matcha-TTS \
+/home/hanlvyuan/miniconda3/envs/emofilm/bin/python tools/inference_emo_film.py \
+  --model_dir /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B \
+  --llm_ckpt exp/emofilm_v1/final.pt \
+  --test_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_a/manifest.jsonl \
+  --esd_root /home/hanlvyuan/LLM-Audio/datasets/ESD \
+  --workspace_root /home/hanlvyuan/LLM-Audio \
+  --output_dir exp/emofilm_v1/full/fedd_a \
+  --device cuda --fp16 --save_every 50
+
+CUDA_VISIBLE_DEVICES=3 PYTHONPATH=.:third_party/Matcha-TTS \
+/home/hanlvyuan/miniconda3/envs/emofilm/bin/python tools/inference_emo_film.py \
+  --model_dir /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B \
+  --llm_ckpt exp/emofilm_v1/final.pt \
+  --test_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_b/manifest.jsonl \
+  --esd_root /home/hanlvyuan/LLM-Audio/datasets/ESD \
+  --workspace_root /home/hanlvyuan/LLM-Audio \
+  --output_dir exp/emofilm_v1/full/fedd_b \
+  --device cuda --fp16 --save_every 50

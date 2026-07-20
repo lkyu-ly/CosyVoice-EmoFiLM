@@ -1,0 +1,11 @@
+{
+  "metric_contract_version": "emofilm-eval-v2",
+  "emo_sim": 61.59631899677907,
+  "dtw": 53.5767018062336,
+  "dtw_normalized": 0.38387669603537583,
+  "dtw_euclidean": 1504.204706309767,
+  "dtw_euclidean_normalized": 10.76573438088339,
+  "wer": 0.1442111111111111,
+  "n_samples": 500,
+  "wer_percent": 14.42111111111111
+}

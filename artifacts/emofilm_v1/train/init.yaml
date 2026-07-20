@@ -1,0 +1,35 @@
+accum_grad: 2
+checkpoint: /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/llm.pt
+checkpoint_lifecycle: latest_final
+config: conf/emo_film.yaml
+contract_dir: /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1
+cv_data: /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/splits/cv/parquet/data.list
+dist_backend: nccl
+dtype: fp32
+epoch: -1
+grad_clip: 5
+log_interval: 100
+max_epoch: 5
+model: llm
+model_dir: exp/emofilm_v1
+num_workers: 2
+onnx_path: null
+optim: adam
+optim_conf:
+  lr: 1.0e-05
+  new_params_lr: 1.0e-05
+pin_memory: false
+prefetch: 2
+qwen_pretrain_path: /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN
+save_per_step: -1
+save_time: 19/07/2026 20:52:06
+scheduler: constantlr
+scheduler_conf:
+  warmup_steps: 2500
+seed: 1986
+step: 0
+tensorboard_dir: exp/emofilm_v1/tb
+timeout: 60
+train_data: /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/splits/train/parquet/data.list
+train_engine: torch_ddp
+use_amp: false

@@ -1,0 +1,36 @@
+cd "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1"
+set -euo pipefail
+
+CUDA_VISIBLE_DEVICES=0 MODELSCOPE_OFFLINE=1 PYTHONPATH=.:third_party/Matcha-TTS \
+/home/hanlvyuan/miniconda3/envs/emofilm/bin/python eval/eval_emo_film.py \
+  --ref_dir exp/emofilm_v1/eval_refs/esd \
+  --hyp_dir exp/emofilm_v1/full/esd \
+  --ref_text_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/esd/manifest.jsonl \
+  --output exp/emofilm_v1/eval/esd_metrics.json \
+  --device cuda --expected_count 1500 --batch_size 16 \
+  > exp/emofilm_v1/eval/esd.log 2>&1 &
+pid_esd=$!
+
+CUDA_VISIBLE_DEVICES=1 MODELSCOPE_OFFLINE=1 PYTHONPATH=.:third_party/Matcha-TTS \
+/home/hanlvyuan/miniconda3/envs/emofilm/bin/python eval/eval_emo_film.py \
+  --ref_dir exp/emofilm_v1/eval_refs/fedd_a \
+  --hyp_dir exp/emofilm_v1/full/fedd_a \
+  --ref_text_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_a/manifest.jsonl \
+  --output exp/emofilm_v1/eval/fedd_a_metrics.json \
+  --device cuda --expected_count 500 --batch_size 16 \
+  > exp/emofilm_v1/eval/fedd_a.log 2>&1 &
+pid_fedd_a=$!
+
+CUDA_VISIBLE_DEVICES=2 MODELSCOPE_OFFLINE=1 PYTHONPATH=.:third_party/Matcha-TTS \
+/home/hanlvyuan/miniconda3/envs/emofilm/bin/python eval/eval_emo_film.py \
+  --ref_dir exp/emofilm_v1/eval_refs/fedd_b \
+  --hyp_dir exp/emofilm_v1/full/fedd_b \
+  --ref_text_manifest /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/eval/fedd_b/manifest.jsonl \
+  --output exp/emofilm_v1/eval/fedd_b_metrics.json \
+  --device cuda --expected_count 500 --batch_size 16 \
+  > exp/emofilm_v1/eval/fedd_b.log 2>&1 &
+pid_fedd_b=$!
+
+wait "$pid_esd"
+wait "$pid_fedd_a"
+wait "$pid_fedd_b"

@@ -1,0 +1,18 @@
+cd "/home/hanlvyuan/.config/superpowers/worktrees/CosyVoice-EmoFiLM/rebuild/emofilm-v1"
+set -o pipefail
+CUDA_VISIBLE_DEVICES=3 PYTHONPATH=.:third_party/Matcha-TTS \
+torchrun --standalone --nproc_per_node=1 \
+  cosyvoice/bin/train_emo.py \
+  --train_engine torch_ddp \
+  --model llm \
+  --config conf/emo_film.yaml \
+  --train_data /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/splits/train/parquet/data.list \
+  --cv_data /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1/splits/cv/parquet/data.list \
+  --qwen_pretrain_path /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/CosyVoice-BlankEN \
+  --checkpoint /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/pretrained_models/CosyVoice2-0.5B/llm.pt \
+  --contract_dir /home/hanlvyuan/LLM-Audio/CosyVoice-EmoFiLM/data/contracts/emofilm_v1 \
+  --model_dir exp/emofilm_v1 \
+  --tensorboard_dir exp/emofilm_v1/tb \
+  --num_workers 2 \
+  --prefetch 2 \
+  2>&1 | tee exp/emofilm_v1/train.log
