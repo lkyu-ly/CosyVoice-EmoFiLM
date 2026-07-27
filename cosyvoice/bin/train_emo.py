@@ -30,12 +30,11 @@ from cosyvoice.utils.train_utils import (
     wrap_cuda_model,
 )
 from cosyvoice.utils.train_utils_emo import (
-    EMOFILM_TRAINABLE_MODULES,
+    build_scheduler,
     finalize_latest_checkpoint,
-    freeze_all_except,
+    freeze,
     init_optimizer_emo,
 )
-from cosyvoice.utils.scheduler import ConstantLR
 
 
 def get_args():
@@ -126,11 +125,47 @@ def write_training_identity(
     base_checkpoint=None,
     resolved_config,
     checkpoint_role,
+    optimizer=None,
+    scheduler=None,
+    train_conf=None,
 ):
-    """记录训练身份、基座权重和当前模型参数哈希。"""
-    from tools.write_emofilm_run_identity import write_run_identity
+    """记录训练身份、基座权重和当前模型参数哈希（v2 emofilm schema）。
 
-    return write_run_identity(
+    v2 identity（schema_version=2, contract_name="emofilm"）绑定：
+      - optimizer_identity（来自 summarize_optimizer_identity：每组 tensor/param count
+        + initial_lr + weight_decay + scheduler type/key_params）；
+      - resolved_config（实际使用的 train_conf，读 resolved.yaml 解析为 dict）；
+      - patch_bundle（dirty worktree 时保存 git diff 实际字节，支持重建）；
+      - base_checkpoint（path + sha256）；
+      - extra: checkpoint_role + parameter_hash。
+
+    v1 ``write_run_identity`` 入口签名与行为完全保留（ADR-0020 兼容锁）。
+    """
+    from cosyvoice.utils.train_utils_emo import summarize_optimizer_identity
+    from tools.write_emofilm_run_identity import write_emofilm_train_identity
+
+    # resolved_config: Path → dict（v2 接受 dict，不接受 path 字符串）
+    resolved_payload = None
+    if isinstance(resolved_config, (str, Path)):
+        rc_path = Path(resolved_config)
+        if rc_path.is_file():
+            with open(rc_path, "r", encoding="utf-8") as handle:
+                resolved_payload = yaml.safe_load(handle)
+    elif isinstance(resolved_config, dict):
+        resolved_payload = dict(resolved_config)
+
+    # optimizer_identity：optimizer+scheduler 同时提供时才计算
+    optimizer_identity = None
+    if optimizer is not None and scheduler is not None:
+        optimizer_identity = summarize_optimizer_identity(
+            model, optimizer, scheduler, train_conf
+        )
+
+    # patch_bundle_path：dirty worktree 时由 write_emofilm_train_identity 内部保存
+    output = Path(output_path)
+    patch_bundle_path = output.parent / "patch_bundle.patch"
+
+    return write_emofilm_train_identity(
         output_path,
         run_kind="train",
         code_root=code_root,
@@ -138,22 +173,40 @@ def write_training_identity(
         command=command,
         seed=seed,
         base_checkpoint=base_checkpoint,
+        resolved_config=resolved_payload,
+        optimizer_identity=optimizer_identity,
+        patch_bundle_path=patch_bundle_path,
         extra={
             "checkpoint_role": checkpoint_role,
             "parameter_hash": hash_model_state(model),
-            "resolved_config": str(Path(resolved_config).resolve()),
         },
     )
 
 
 def update_training_identity(identity_path, *, model, final_checkpoint):
-    """将 final checkpoint 与最终模型参数哈希写回训练身份。"""
+    """将 final checkpoint 与最终模型参数哈希写回训练身份（v2 emofilm schema）。
+
+    若读到旧 v1 identity（schema_version < 2），raise 明确提示重训——
+    v1 identity 缺少 optimizer_identity / resolved_config / patch_bundle，
+    无法安全补写 v2 字段。
+    """
     import json
 
     from tools.write_emofilm_run_identity import sha256_file
 
     path = Path(identity_path)
     identity = json.loads(path.read_text(encoding="utf-8"))
+
+    # v1 identity 不支持 update（字段结构不兼容）→ raise 提示重训
+    schema_version = identity.get("schema_version", 1)
+    if schema_version < 2:
+        raise RuntimeError(
+            f"identity at {path} has schema_version={schema_version} (v1 "
+            f"emofilm_v1); v1 identity lacks optimizer_identity / resolved_config "
+            f"/ patch_bundle — please retrain to produce a v2 identity "
+            f"(contract_name=emofilm, schema_version=2)."
+        )
+
     final_path = Path(final_checkpoint).resolve()
     if not final_path.is_file():
         raise FileNotFoundError(final_path)
@@ -231,7 +284,7 @@ def main():
     writer = init_summarywriter(args)
 
     model = configs[args.model]
-    freeze_all_except(model, EMOFILM_TRAINABLE_MODULES)
+    freeze(model)
     start_step, start_epoch = 0, -1
     if args.checkpoint is not None:
         if not os.path.exists(args.checkpoint):
@@ -241,8 +294,8 @@ def main():
         checkpoint_role = "fresh"
 
     model = wrap_cuda_model(args, model)
-    optimizer = init_optimizer_emo(model, configs)
-    scheduler = ConstantLR(optimizer)
+    optimizer = init_optimizer_emo(model, configs["train_conf"])
+    scheduler = build_scheduler(optimizer, configs["train_conf"])
     scheduler.set_step(start_step)
 
     info_dict = deepcopy(configs["train_conf"])
@@ -272,6 +325,9 @@ def main():
                 base_checkpoint=args.checkpoint if checkpoint_role == "base" else None,
                 resolved_config=resolved_config,
                 checkpoint_role=checkpoint_role,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                train_conf=info_dict,
             )
     if dist.is_available() and dist.is_initialized():
         dist.barrier()

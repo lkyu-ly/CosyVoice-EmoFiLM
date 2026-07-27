@@ -13,12 +13,16 @@ import torch.nn as nn
 import yaml
 
 from cosyvoice.llm.llm_emotion import Qwen2LM_Emotion
-from cosyvoice.utils.train_utils_emo import freeze_all_except, init_optimizer_emo
+from cosyvoice.utils.train_utils_emo import freeze, init_optimizer_emo
+from tests._emofilm_fakes import _FakeBackbone, _FakeHF
 
 
-EMOFILM_TRAINABLE_MODULES = (
+# 活跃 v2 拓扑的可训练模块前缀（5 组：FiLM + 下游任务头 + 预训练 decoder）。
+EMOFILM_TRAINABLE_PREFIXES = (
     "emotion_encoder",
     "emotion_adapter",
+    "emotion_head",
+    "arousal_head",
     "llm_decoder",
 )
 
@@ -31,16 +35,10 @@ def _checkpoint_helpers():
     return load_base_state, load_trained_state
 
 
-class _FakeBackbone(nn.Module):
-    def __init__(self, model_dim):
-        super().__init__()
-        self.embed_tokens = nn.Embedding(128, model_dim)
-
-
-class _FakeHF(nn.Module):
-    def __init__(self, model_dim):
-        super().__init__()
-        self.model = _FakeBackbone(model_dim)
+# _FakeBackbone / _FakeHF 从 tests._emofilm_fakes 复用（DRY 整合）。
+# 本文件保留专属的 _FakeQwen：它带 output_bias，用于反捷径梯度断言
+# （brief 06 §C：identity backbone 不混合位置 → 需 bias 让 head 拿到梯度），
+# 与共享的恒等版 _FakeQwen 不同，故不整合。
 
 
 class _FakeQwen(nn.Module):
@@ -66,8 +64,29 @@ def _make_model(model_dim=8, speech_token_size=16):
         intensity_vocab_size=4,
         llm=_FakeQwen(model_dim),
         sampling=lambda scores, decoded, sampling: 2,
-        emo_loss_weight=0.2,
+        emotion_head_weight=1.0,
+        intensity_head_weight=1.0,
     )
+
+
+def _three_group_train_conf():
+    """v2 三组 optimizer 配置（工程占位默认，非审计最优）。
+
+    注意：顶层 ``optim_conf.lr`` 是死字段（票据 06 让
+    ``validate_optim_scheduler_conf`` 对其 hard-fail）——训练只读
+    ``groups[role].lr``，故此处不设顶层 lr，每组在 groups 下独立配置。
+    """
+    return {
+        "optim": "adam",
+        "optim_conf": {
+            "groups": {
+                "random_new_condition": {"lr": 1e-4, "weight_decay": 0.0},
+                "downstream_heads": {"lr": 1e-4, "weight_decay": 0.0},
+                "pretrained_decoder": {"lr": 1e-5, "weight_decay": 0.0},
+            },
+        },
+        "scheduler": "constant",
+    }
 
 
 def _make_batch(batch_size=1, text_len=3, speech_len=6, speech_token_size=16):
@@ -81,24 +100,14 @@ def _make_batch(batch_size=1, text_len=3, speech_len=6, speech_token_size=16):
     }
 
 
-def test_emotion_classifier_reads_modulated_text():
+def test_no_input_classifier_but_downstream_heads_exist():
+    """活跃 v2 拓扑：无输入端 emotion_classifier；有下游 emotion_head/arousal_head。"""
     model = _make_model()
-    adapter_outputs = []
-    classifier_inputs = []
-    model.emotion_adapter.register_forward_hook(
-        lambda module, inputs, output: adapter_outputs.append(output.detach().clone())
+    assert not hasattr(model, "emotion_classifier"), (
+        "输入端 emotion_classifier 反模式必须从活跃模型删除"
     )
-    model.emotion_classifier.register_forward_pre_hook(
-        lambda module, inputs: classifier_inputs.append(inputs[0].detach().clone())
-    )
-
-    model(_make_batch(), torch.device("cpu"))
-
-    assert adapter_outputs
-    assert classifier_inputs
-    torch.testing.assert_close(
-        classifier_inputs[0], adapter_outputs[0], atol=1e-6, rtol=1e-6
-    )
+    assert hasattr(model, "emotion_head")
+    assert hasattr(model, "arousal_head")
 
 
 def test_effective_model_topology_and_shapes_match_emofilm_contract():
@@ -108,48 +117,48 @@ def test_effective_model_topology_and_shapes_match_emofilm_contract():
     assert model.emotion_encoder.emotion_embedding.weight.shape == (6, 896)
     assert model.emotion_encoder.intensity_embedding.weight.shape == (4, 896)
     assert model.emotion_adapter.projection.weight.shape == (1792, 896)
-    assert model.emotion_classifier.weight.shape == (6, 896)
+    # 下游任务头：emotion_head 5 类（pad 不参与），arousal_head 标量回归
+    assert model.emotion_head.weight.shape == (5, 896)
+    assert model.arousal_head.weight.shape == (1, 896)
     assert model.llm_decoder.out_features == 6564
     assert model.speech_embedding.num_embeddings == 6564
 
 
 def test_exact_trainable_module_names():
+    """v2 freeze 解冻 5 组：FiLM + 下游任务头 + 预训练 decoder。"""
     model = _make_model()
-    freeze_all_except(model, EMOFILM_TRAINABLE_MODULES)
+    freeze(model)
 
     trainable_prefixes = {
         name.split(".", 1)[0]
         for name, parameter in model.named_parameters()
         if parameter.requires_grad
     }
-    assert trainable_prefixes == {
-        "emotion_encoder",
-        "emotion_adapter",
-        "llm_decoder",
-    }
+    assert trainable_prefixes == set(EMOFILM_TRAINABLE_PREFIXES)
 
 
-def test_classifier_is_frozen_and_not_in_optimizer():
+def test_optimizer_covers_trainable_and_excludes_frozen():
+    """v2 optimizer 三组完整覆盖 requires_grad 参数，冻结参数不进组。"""
     model = _make_model()
-    freeze_all_except(model, EMOFILM_TRAINABLE_MODULES)
-    optimizer = init_optimizer_emo(
-        model,
-        {
-            "train_conf": {
-                "optim": "adam",
-                "optim_conf": {"lr": 1e-5, "new_params_lr": 1e-5},
-            }
-        },
-    )
+    freeze(model)
+    optimizer = init_optimizer_emo(model, _three_group_train_conf())
 
-    classifier_ids = {id(parameter) for parameter in model.emotion_classifier.parameters()}
     optimizer_ids = {
         id(parameter)
         for group in optimizer.param_groups
         for parameter in group["params"]
     }
-    assert all(not parameter.requires_grad for parameter in model.emotion_classifier.parameters())
-    assert classifier_ids.isdisjoint(optimizer_ids)
+    trainable_ids = {
+        id(parameter)
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    }
+    assert optimizer_ids == trainable_ids
+    # 三组命名角色
+    names = {group["name"] for group in optimizer.param_groups}
+    assert names == {
+        "random_new_condition", "downstream_heads", "pretrained_decoder",
+    }
 
 
 def test_token_mel_ratio_two_trims_both_sequences():
@@ -407,19 +416,28 @@ def test_training_identity_records_resolved_config_and_parameter_hash(tmp_path):
         checkpoint_role="base",
     )
 
-    assert identity["contract_name"] == "emofilm_v1"
+    # v2 emofilm schema
+    assert identity["contract_name"] == "emofilm"
+    assert identity["schema_version"] == 2
     assert identity["base_checkpoint"]["sha256"]
     assert identity["extra"]["parameter_hash"] == hash_model_state(model)
-    assert identity["extra"]["resolved_config"] == str(resolved.resolve())
+    # v2: resolved_config 是顶层 dict（不再是 extra 中的 path 字符串）
+    assert identity["resolved_config"] is not None
+    assert identity["resolved_config"]["train_conf"]["max_epoch"] == 5
     assert yaml.safe_load(resolved.read_text(encoding="utf-8"))["train_conf"]["max_epoch"] == 5
 
 
 def test_training_identity_records_final_checkpoint_and_parameter_hash(tmp_path):
     from cosyvoice.bin.train_emo import update_training_identity
 
+    # v2 identity（update_training_identity 要求 schema_version >= 2）
     identity_path = tmp_path / "train_identity.json"
     identity_path.write_text(
-        __import__("json").dumps({"extra": {"checkpoint_role": "base"}}),
+        __import__("json").dumps({
+            "schema_version": 2,
+            "contract_name": "emofilm",
+            "extra": {"checkpoint_role": "base"},
+        }),
         encoding="utf-8",
     )
     model = _CheckpointModel()

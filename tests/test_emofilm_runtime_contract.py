@@ -9,6 +9,7 @@ import torch
 
 def _make_model_with_fake_runtime():
     from cosyvoice.cli.model_emo import CosyVoice2Model_Emotion
+    from cosyvoice.llm.llm_emotion import DecodeResult
 
     model = CosyVoice2Model_Emotion.__new__(CosyVoice2Model_Emotion)
     model.device = torch.device("cpu")
@@ -18,10 +19,16 @@ def _make_model_with_fake_runtime():
     model.llm_end_dict = {}
     model.hift_cache_dict = {}
 
-    def fake_llm_job(*args):
+    def fake_llm_job(*args, **kwargs):
         uuid = args[-1]
         model.tts_speech_token_dict[uuid].append(2)
         model.llm_end_dict[uuid] = True
+        # 模拟真实 llm_job 暴露结构化解码结果（eos 完成），供 tts 门控放行 token2wav
+        model._last_decode_result = DecodeResult(
+            tokens=[2], finish_reason="eos",
+            min_len=2, max_len=4, num_valid_speech_tokens=1,
+            invalid_token_retries=0, text_len=1,
+        )
 
     model.llm_job = fake_llm_job
     return model
@@ -66,7 +73,7 @@ def test_uuid_state_is_cleaned_when_generator_is_closed():
 def test_llm_job_thread_errors_are_propagated_and_cleaned():
     model = _make_model_with_fake_runtime()
 
-    def failing_llm_job(*args):
+    def failing_llm_job(*args, **kwargs):
         raise RuntimeError("synthetic llm worker failure")
 
     model.llm_job = failing_llm_job

@@ -1,9 +1,33 @@
-# Emo-FiLM 配置: 基于 CosyVoice2 派生，替换 llm/tokenizer/data_pipeline/train_conf
-# 关键差异（spec section 10）：
-#   - llm: Qwen2LM_Emotion（含 emotion_encoder/emotion_adapter/emotion_classifier）
-#   - get_tokenizer: QwenTokenizer_Emotion（产出 text_token/emotion_ids/intensity_ids 三元组）
-#   - data_pipeline: 用 tokenize_emo 替代 tokenize
-#   - train_conf.optim_conf: 新增 new_params_lr（emotion 模块用此 lr）
+# Emo-FiLM 配置: target-only 单流协议（活跃主线权威，ADR-0020 扁平化）。
+#
+# 本配置是 EmoFiLM 的单一活跃配置权威。基于 CosyVoice2 派生，替换
+# llm/tokenizer/data_pipeline/train_conf。关键点：
+#   - llm: ``Qwen2LM_Emotion``（无输入端 emotion_classifier；不接受 mix_ratio /
+#     emo_loss_weight / alpha）。FiLM (emotion_encoder + emotion_adapter) 保留，
+#     另有下游 emotion/arousal 监督任务头。
+#   - 删除死配置字段：mix_ratio（双流）、emo_loss_weight（输入端 classifier CE）、
+#     顶层 alpha（配置占位；采样超参归属逐生成 decode_config）。
+#     → tools/build_emofilm_contract.py :: assert_no_dead_config 必须通过。
+#   - 训练协议恒定单流：SOS + FiLM(target text) + task + teacher-forced target
+#     speech；推理前缀 = SOS + FiLM(target text) + task。
+#   - prompt_text / prompt_speech_token / prompt_emotion / prompt_intensity 不进
+#     LLM 条件；speaker / Flow / HiFT prompt 条件（flow_prompt_speech_token /
+#     prompt_speech_feat / flow_embedding）保持透传。
+#   - 长度 / finish_reason 合同已落地：
+#     decode_config（默认值）：min_len = int(text_len*min_token_text_ratio)，
+#     max_len = min(int(text_len*max_token_text_ratio), max_len_hard_cap)；
+#     解码前 max_len > min_len 否则结构化 input_rejected（不进采样）。
+#     finish_reason ∈ {eos, max_len_reached, invalid_token_retry_exhausted,
+#     sampler_error, input_rejected}；仅 eos 进 Flow/HiFT + 正式 WAV。
+#     逐生成 decode_config 可覆盖这些默认（schema §2 GenerationRow.decode_config）。
+
+# decode 默认配置（长度合同）。逐生成 decode_config 可覆盖；
+# GenerationRow.decode_config 必须记录实际使用的 min/max_token_text_ratio +
+# max_len_hard_cap（schema §2，tools/build_emofilm_contract.validate_generation_row）。
+decode_config:
+    min_token_text_ratio: 2
+    max_token_text_ratio: 20
+    max_len_hard_cap: 2000   # ~80s @ 25Hz token_frame_rate；bounded 防失控（修复历史 max_len=200 bug）
 
 # set random seed, so that you may reproduce your result.
 __set_seed1: !apply:random.seed [1986]
@@ -29,12 +53,10 @@ llm: !new:cosyvoice.llm.llm_emotion.Qwen2LM_Emotion
     llm_input_size: !ref <llm_input_size>
     llm_output_size: !ref <llm_output_size>
     speech_token_size: 6561
-    emotion_vocab_size: 6  # 5 emotions + 1 padding
+    emotion_vocab_size: 6  # 5 emotions + 1 padding（tokenizer id 空间）
     intensity_vocab_size: 4  # 3 intensities + 1 padding
     length_normalized_loss: True
     lsm_weight: 0
-    emo_loss_weight: 0.2
-    mix_ratio: [5, 15]
     llm: !new:cosyvoice.llm.llm.Qwen2Encoder
         pretrain_path: !ref <qwen_pretrain_path>
     sampling: !name:cosyvoice.utils.common.ras_sampling
@@ -42,7 +64,17 @@ llm: !new:cosyvoice.llm.llm_emotion.Qwen2LM_Emotion
         top_k: 25
         win_size: 10
         tau_r: 0.1
-    alpha: 0.05  # 配置占位
+    # 下游监督任务头 loss 权重（语义不同于输入端 emo_loss_weight：此处是生成
+    # 因果链下游 speech-token hidden 上 emotion/arousal 头的权重）。默认 1.0 / 1.0
+    # 为中立起始值，**非审计最优**；正式实验由 optimizer 分组 + 调参决定。
+    emotion_head_weight: 1.0
+    intensity_head_weight: 1.0
+    # 下游监督开关（B1 静默→显式，ticket 02）。本次实验 = FiLM-only（不接 span
+    # 监督头），故 disabled：无 span batch 只算 loss_tts 且不静默——配置与运行
+    # 行为一致。若未来接通 span 数据链，改 enabled（无 span 将显式报错）。
+    downstream_supervision: disabled
+# 不传 mix_ratio / emo_loss_weight / alpha（死字段，assert_no_dead_config 拒绝）。
+# base 仍指 CosyVoice2 llm.pt（Qwen2Encoder + llm.pt checkpoint）。
 
 flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
     input_size: 512
@@ -138,7 +170,8 @@ hifigan: !new:cosyvoice.hifigan.hifigan.HiFiGan
         !ref <mel_spec_transform1>
     ]
 
-# processor functions
+# processor functions（tokenize_emo 产出 text_token / emotion_ids /
+# intensity_ids 三元组；单流协议不消费 prompt emotion/intensity）
 parquet_opener: !name:cosyvoice.dataset.processor.parquet_opener
 get_tokenizer: !name:cosyvoice.tokenizer.emo_tokenizer.get_emo_tokenizer
     token_path: !ref <qwen_pretrain_path>
@@ -184,7 +217,7 @@ padding: !name:cosyvoice.dataset.processor.padding
     use_spk_embedding: False
 
 
-# dataset processor pipeline (使用 tokenize_emo 替代 tokenize)
+# dataset processor pipeline（tokenize_emo 产出 emotion_ids / intensity_ids）
 data_pipeline: [
     !ref <parquet_opener>,
     !ref <tokenize_emo>,
@@ -212,16 +245,36 @@ data_pipeline_gan: [
     !ref <padding>,
 ]
 
-# llm flow train conf（新增 new_params_lr 用于 emotion 模块）
+# llm flow train conf
+# optimizer 分组 + scheduler 合同：
+#   - 三稳定命名组：random_new_condition（FiLM: emotion_encoder/emotion_adapter）/
+#     downstream_heads（emotion_head/arousal_head）/ pretrained_decoder（llm_decoder）。
+#     每组独立 LR + weight_decay，组间参数 id 无交集、完整覆盖 trainable、冻结参数
+#     （llm backbone / speech_embedding / llm_embedding）不进任何组。
+#   - scheduler 单一工厂：warmup 实际改变前期 LR；constant 不接受残留 warmup_steps；
+#     未知字段启动失败（``validate_optim_scheduler_conf``）。
+#   - **默认 LR / weight_decay 为工程占位默认，非静态审计最优**。
+#     正式实验由调参实验决定；此处仅保证分组结构与 scheduler 合同可审计。
 train_conf:
     optim: adam
-    optim_conf:
-        lr: 1e-5
-        new_params_lr: 1e-5  # emotion_* / llm_decoder 用此 lr
-    scheduler: constantlr
+    optim_conf:   # 顶层 lr 已移除（死字段，票据 06）；训练只读 groups[role].lr
+        groups:
+            # FiLM 随机新增条件模块（随机初始化；较高 LR 快速收敛）
+            random_new_condition:
+                lr: 1.0e-4
+                weight_decay: 0.0
+            # 下游监督任务头（随机初始化；与 FiLM 同 LR 起步）
+            downstream_heads:
+                lr: 1.0e-4
+                weight_decay: 0.0
+            # 预训练 speech-token decoder（base llm.pt 含；低 LR 续训防灾难遗忘）
+            pretrained_decoder:
+                lr: 1.0e-5
+                weight_decay: 0.0
+    scheduler: warmup
     scheduler_conf:
-        warmup_steps: 2500
-    max_epoch: 5   # 论文对齐（学位论文表2-1 语音合成阶段=5 epoch）；train_conf_gan 不参与本复现
+        warmup_steps: 250   # 工程占位；非 audit 最优
+    max_epoch: 5   # 论文对齐（学位论文表2-1 语音合成阶段=5 epoch）
     grad_clip: 5
     accum_grad: 2
     log_interval: 100

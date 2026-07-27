@@ -1,89 +1,32 @@
-"""EmoFiLM 768d/3D、无平滑词级标签生成测试。"""
+"""EmoFiLM 数据流水线辅助函数测试（ADR-0020 扁平化后）。
 
-import json
-import subprocess
-import sys
-from pathlib import Path
+``tools/generate_tagged_jsonl.py`` 已合并为监督 span 生成器（原 v1 argmax 词级
+标注器仅存 git 基线 ``9c6d84b``）。本文件保留对**仍存活的数据流水线辅助函数**
+的测试：
+- ``merge_word_predictions``（相邻词 emotion+intensity 双键合并 → ``<emotion>`` 标签）；
+- ``classify_text_coverage``（精确词覆盖 / 撇号切分等价；其他差异拒绝）；
+- ``intensity_from_arousal``（arousal → 离散强度控制输入阈值；与原 v1
+  ``arousal_to_intensity`` 同语义，仅作控制接口，不作强度真值）。
 
-import numpy as np
-import torch
+v1 生成器专属测试（v1 CLI 子进程产 ``<emotion>`` 标签、v1 ``generate_tagged_dataset``
+拒绝过滤）随 v1 代码移除——其覆盖的 v1 argmax 路径已被监督 span 生成器取代，
+对应行为在 ``test_emofilm_weak_supervision.py`` 覆盖。
+"""
 
+import pytest
 
-PYTHON = sys.executable
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "tools/generate_tagged_jsonl.py"
-
-
-def test_generate_jsonl_format(tmp_path):
-    """符合合同 checkpoint 形状的最小数据可以生成带来源戳记的 JSONL。"""
-    np.random.seed(42)
-    torch.manual_seed(42)
-
-    from cosyvoice_emo.emo_annotator import WordSequenceModel
-
-    model = WordSequenceModel(input_dim=768, num_classes=5, num_heads=8, dropout_rate=0.3, reg_dim=3)
-    checkpoint = tmp_path / "model.pt"
-    torch.save(model.state_dict(), checkpoint)
-
-    word_blocks = tmp_path / "word_blocks"
-    for utt_id in ("utt_1", "utt_2"):
-        utt_dir = word_blocks / utt_id
-        utt_dir.mkdir(parents=True)
-        for word_index in range(4):
-            n_frames = np.random.randint(5, 20)
-            torch.save(
-                {
-                    "frames": torch.randn(n_frames, 768),
-                    "word": f"word{word_index}",
-                    "padding_mask": torch.zeros(n_frames, dtype=torch.bool),
-                },
-                utt_dir / f"{word_index:04d}_0_{n_frames}.pt",
-            )
-
-    manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text(
-        "".join(
-            json.dumps(
-                {
-                    "utt_id": utt_id,
-                    "wav_path": f"/tmp/{utt_id}.wav",
-                    "text": "word0 word1 word2 word3",
-                    "speaker_id": "0011",
-                }
-            )
-            + "\n"
-            for utt_id in ("utt_1", "utt_2")
-        ),
-        encoding="utf-8",
-    )
-
-    output = tmp_path / "tagged.jsonl"
-    subprocess.run(
-        [
-            PYTHON,
-            str(SCRIPT),
-            f"--data_dir={word_blocks}",
-            f"--manifest={manifest}",
-            f"--checkpoint={checkpoint}",
-            f"--output_jsonl={output}",
-            "--device=cpu",
-        ],
-        check=True,
-    )
-
-    rows = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 2
-    for row in rows:
-        assert row["label_source"] == "word_annotator_pseudo_label"
-        assert row["granularity"] == "word"
-        assert row["text"]
-        assert "<emotion" in row["text"]
-        assert "</emotion>" in row["text"]
+from tools.build_emofilm_contract import (
+    classify_text_coverage,
+    merge_word_predictions,
+    validate_span,
+)
+from tools.generate_tagged_jsonl import (
+    intensity_from_arousal,
+    merge_word_predictions_to_v2_spans,
+)
 
 
 def test_merge_requires_matching_emotion_and_intensity():
-    from tools.build_emofilm_contract import merge_word_predictions
-
     tagged = merge_word_predictions(
         [
             {"word": "I", "predicted_emotion": "ang", "predicted_intensity": "high"},
@@ -98,18 +41,7 @@ def test_merge_requires_matching_emotion_and_intensity():
     assert "today</emotion>" in tagged
 
 
-def test_arousal_bucketing():
-    from tools.generate_tagged_jsonl import arousal_to_intensity
-
-    assert arousal_to_intensity(4.0) == "high"
-    assert arousal_to_intensity(3.0) == "medium"
-    assert arousal_to_intensity(2.0) == "low"
-    assert arousal_to_intensity(1.5) == "low"
-
-
 def test_text_coverage_accepts_only_exact_or_apostrophe_equivalent_pairs():
-    from tools.generate_tagged_jsonl import classify_text_coverage
-
     assert classify_text_coverage(
         "Everybody's told the story.",
         "<emotion type='neu' intensity='low'>everybody</emotion> "
@@ -124,71 +56,124 @@ def test_text_coverage_accepts_only_exact_or_apostrophe_equivalent_pairs():
     assert mismatch["missing_from_tagged"] == ["mmhmm"]
 
 
-def test_generate_filters_rejected_rows_without_reintroducing_existing_rejections(tmp_path, monkeypatch):
-    from tools import generate_tagged_jsonl as module
+def test_intensity_from_arousal_bucketing():
+    """arousal → 离散强度控制输入阈值（仅控制接口；连续 arousal 仍是监督 target）。"""
+    assert intensity_from_arousal(4.0) == "high"
+    assert intensity_from_arousal(3.0) == "medium"
+    assert intensity_from_arousal(2.0) == "low"
+    assert intensity_from_arousal(1.5) == "low"
 
-    manifest = tmp_path / "manifest.jsonl"
-    manifest.write_text(
-        "\n".join(
-            [
-                json.dumps({"utt_id": "keep", "text": "Keep me.", "original_split": "train"}),
-                json.dumps({"utt_id": "reject", "text": "Missing it.", "original_split": "cv"}),
-            ]
+
+# ============================================================
+# Task 7：calibrated/calibration 信息贯穿（brief 07）
+# ============================================================
+
+
+def _base_pred(**overrides: object) -> dict[str, object]:
+    """构造一条合法的 predictor 输出（默认未校准），可被 overrides 覆盖。"""
+    pred: dict[str, object] = {
+        "word": "hi",
+        "start_sec": 0.0,
+        "end_sec": 0.5,
+        "start_frame": 0,
+        "end_frame": 12,
+        "frame_rate_hz": 50.0,
+        "emotion_soft_distribution": [0.1, 0.8, 0.05, 0.03, 0.02],
+        "arousal": 3.0,
+        "raw_score": 0.8,
+    }
+    pred.update(overrides)
+    return pred
+
+
+def test_calibrated_predictor_propagates_to_span():
+    """predictor 返 calibrated=True + calibration → span 透传（不死写 False）。"""
+    pred = _base_pred(
+        calibrated=True,
+        calibration={"method": "temperature", "version": "v1"},
+    )
+    spans = merge_word_predictions_to_v2_spans(
+        utt_id="u1",
+        word_preds=[pred],
+        sentence_emotion="hap",
+        sentence_vad=None,
+        annotator_provenance={"model": "x"},
+    )
+    assert spans[0]["calibrated"] is True
+    assert spans[0]["calibration"] == {"method": "temperature", "version": "v1"}
+    # 成员词也应保留 calibrated/calibration 以便溯源（brief §1）。
+    member = spans[0]["provenance"]["member_words"][0]
+    assert member["calibrated"] is True
+    assert member["calibration"] == {"method": "temperature", "version": "v1"}
+
+
+def test_mixed_calibrated_members_raise():
+    """相邻成员 calibrated 不一致 → raise ValueError 携 utt_id（合并兼容键含 calibrated）。
+
+    场景：两词同 control_emotion_id/control_intensity_id（默认 medium），故仅
+    calibrated 差异触发合并路径 → 不一致必须 raise，否则 span 会写首个成员的值
+    而丢失另一成员的校准状态。
+    """
+    pred_a = _base_pred(
+        word="hello",
+        calibrated=True,
+        calibration={"method": "temperature", "version": "v1"},
+    )
+    pred_b = _base_pred(
+        word="world",
+        calibrated=False,
+    )
+    # 两词 emotion/intensity 兼容（同 neu/medium）；calibrated 不一致 → raise。
+    with pytest.raises(ValueError, match="u1") as exc_info:
+        merge_word_predictions_to_v2_spans(
+            utt_id="u1",
+            word_preds=[pred_a, pred_b],
+            sentence_emotion="hap",
+            sentence_vad=None,
+            annotator_provenance={"model": "x"},
         )
-        + "\n",
-        encoding="utf-8",
-    )
-    data_dir = tmp_path / "blocks"
-    for utt_id in ("keep", "reject"):
-        (data_dir / utt_id).mkdir(parents=True)
-    torch.save(
-        {"frames": torch.zeros(2, 768), "word": "keep", "end_sec": 0.041, "end_frame": 2},
-        data_dir / "keep/0000_0_2.pt",
-    )
-    torch.save(
-        {"frames": torch.zeros(2, 768), "word": "me", "end_sec": 0.081, "end_frame": 4},
-        data_dir / "keep/0001_2_4.pt",
-    )
-    torch.save(
-        {"frames": torch.zeros(2, 768), "word": "missing", "end_sec": 0.04, "end_frame": 2},
-        data_dir / "reject/0000_0_2.pt",
-    )
+    assert "calibrat" in str(exc_info.value).lower()
 
-    monkeypatch.setattr(module, "load_word_sequence_model", lambda *args, **kwargs: object())
-    monkeypatch.setattr(
-        module,
-        "predict_words",
-        lambda model, word_files, utt_dir, device: [
-            {
-                "word": torch.load(utt_dir / word_file, weights_only=True)["word"],
-                "predicted_emotion": "neu",
-                "predicted_intensity": "low",
-            }
-            for word_file in word_files
-        ],
-    )
 
-    output = tmp_path / "tagged.jsonl"
-    rejected = tmp_path / "rejected.jsonl"
-    existing_rejected = tmp_path / "existing_rejected.jsonl"
-    existing_rejected.write_text(
-        json.dumps({"utt_id": "reject", "reason": "audio_text_mismatch", "original_split": "cv"})
-        + "\n",
-        encoding="utf-8",
+def test_default_calibrated_false_when_predictor_omits():
+    """predictor 不返 calibrated → 默认 False + calibration None（语义正确）。"""
+    pred = _base_pred()  # 无 calibrated/calibration
+    spans = merge_word_predictions_to_v2_spans(
+        utt_id="u1",
+        word_preds=[pred],
+        sentence_emotion="hap",
+        sentence_vad=None,
+        annotator_provenance={"model": "x"},
     )
-    report = module.generate_tagged_dataset(
-        data_dir=data_dir,
-        manifest_path=manifest,
-        checkpoint=tmp_path / "checkpoint.pt",
-        output_jsonl=output,
-        rejected_jsonl=rejected,
-        device="cpu",
-        existing_rejected_jsonl=existing_rejected,
-    )
+    assert spans[0]["calibrated"] is False
+    assert spans[0].get("calibration") is None
 
-    assert [json.loads(line)["utt_id"] for line in output.read_text().splitlines()] == ["keep"]
-    rejected_row = json.loads(rejected.read_text())
-    assert rejected_row["utt_id"] == "reject"
-    assert rejected_row["original_split"] == "cv"
-    assert rejected_row["reason"] == "audio_text_mismatch"
-    assert report == {"kept": 1, "rejected": 1, "total": 2}
+
+def test_calibrated_span_passes_validator_end_to_end():
+    """端到端：predictor 返完整 calibration → 生成的 span 通过 validate_span。
+
+    覆盖票据 05 validator 的 calibrated=True 分支（此前死校验：生成器硬编码 False
+    导致该分支无法被真实数据触发）。calibration 必须含样本集溯源字段
+    （calibration_sample_set_ref / n_calibration_samples）。
+    """
+    pred = _base_pred(
+        calibrated=True,
+        calibration={
+            "method": "isotonic",
+            "version": "emotion2vec-v1",
+            "calibration_sample_set_ref": "iemocap_calib_split:v1",
+            "n_calibration_samples": 512,
+        },
+    )
+    spans = merge_word_predictions_to_v2_spans(
+        utt_id="iemocap_sess1_0001",
+        word_preds=[pred],
+        sentence_emotion="hap",
+        sentence_vad=None,
+        annotator_provenance={"model": "x"},
+    )
+    # 必须真正是 calibrated=True（修复前生成器硬编码 False 导致 validator True 分支死锁）。
+    assert spans[0]["calibrated"] is True
+    assert spans[0]["calibration"]["method"] == "isotonic"
+    # 生成器产出 → validator 接受（此前 calibrated=True 分支不可达）。
+    validate_span(spans[0])

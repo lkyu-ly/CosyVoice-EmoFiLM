@@ -47,12 +47,6 @@ class CosyVoice2_Emotion(CosyVoice2):
                 f, overrides={"qwen_pretrain_path": os.path.join(model_dir, "CosyVoice-BlankEN")}
             )
 
-        # 关键校验：configs['llm'] 必须是 Qwen2LM_Emotion（防止 yaml 配置错乱）
-        assert self.configs["llm"].__class__.__name__ == "Qwen2LM_Emotion", (
-            f"conf/emo_film.yaml 加载后 configs['llm'] 应为 Qwen2LM_Emotion，"
-            f"实际为 {self.configs['llm'].__class__.__name__}。请检查 yaml 配置。"
-        )
-
         self.sample_rate = self.configs.get("sample_rate", 24000)
 
         self.model = CosyVoice2Model_Emotion(
@@ -73,6 +67,11 @@ class CosyVoice2_Emotion(CosyVoice2):
             allowed_special=self.configs.get("allowed_special", "all"),
         )
         self.tokenizer = tokenizer
+        # 抽取 decode_config 供 ``inference_emo_film`` 透传给 ``model.tts``（Task 2 / #3）。
+        # 与 ``sample_rate`` 同模式：只保留需要的字段，释放其余 configs 避免误用
+        # （历史 bug：保留全 configs 又 del 导致 inference_emo_film 无法读 decode_config；
+        # ``model_emo.tts`` 也不透传，LLM 默认值恰好等于 yaml 但改 yaml 不生效）。
+        self.decode_config = self.configs.get("decode_config")
         del self.configs
 
     def inference_emo_film(self, text_with_emo, prompt_text, prompt_wav_path,
@@ -91,5 +90,10 @@ class CosyVoice2_Emotion(CosyVoice2):
             text_with_emo, prompt_text, prompt_wav_path,
             self.sample_rate, zero_shot_spk_id,
         )
-        for model_output in self.model.tts(**model_input, stream=False, speed=speed):
+        # decode_config 透传（Task 2 / #3）：yaml → __init__ 抽取 → 此处 → model.tts
+        # → llm.inference，覆盖 LLM 硬编码默认长度参数。
+        for model_output in self.model.tts(
+            **model_input, stream=False, speed=speed,
+            decode_config=self.decode_config,
+        ):
             yield model_output

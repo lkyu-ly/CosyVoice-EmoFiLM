@@ -31,3 +31,21 @@ _Avoid:_ 目录复制完成、仅比较总字节数
 **遗留共享状态**:
 错误 main、历史 debug 或旧实验在共享文件和目录中留下、且未被当前主线白名单选中的内容。它不进入 canonical checkout。
 _Avoid:_ 历史证据包、作者原始材料
+
+## 主线代码演化（ADR-0020）
+
+**活跃主线代码**:
+canonical checkout 中当前受支持的单一权威代码。每次修复/改进都是重构任务，不留旧代码遗留；旧代码仅存于 git 历史。
+_Avoid:_ v1/v2 并行副本、版本化后缀文件（`*_v2.py`）、向后兼容的旧版本代码路径
+
+**v1 基线锚点**:
+git commit `9c6d84b`，EmoFiLM v1 优化基线的代码状态锚点；任一文件可 `git checkout 9c6d84b -- <path>` 回退。它替代"工作树文件字节哈希锁"作为 v1 不可变性的保证。
+_Avoid:_ 文件内容 md5/sha256 基线锁、`_V1_BASELINES`、字节级只读断言
+
+**产物身份**:
+生成与评测产物由结构化字段（utt_id / checkpoint / control / prompt / decode_config / source / finish_reason / wav_path）绑定，不依赖文件内容哈希。safe-resume 仅校验文件存在性 + 逐条身份指纹。
+_Avoid:_ wav_sha256 比对、源码哈希标定、用哈希值锁文件不变性
+
+**权威基线资产（只读语义细化）**:
+代码资产可随活跃主线演化（重构）；数据产物（checkpoint / WAV / manifest / 运行身份 / metrics）磁盘冻结只读。代码的不可变性由 git 历史保证，不由工作树哈希保证。
+_Avoid:_ 把"v1 只读"理解为工作树代码字节冻结

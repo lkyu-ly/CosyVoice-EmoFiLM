@@ -52,11 +52,13 @@ def test_three_sample_smoke_writes_audio_manifest_and_identity(tmp_path, monkeyp
         sample_rate = 24000
 
         def inference_emo_film(self, **kwargs):
-            yield {"tts_speech": torch.zeros(1, 8)}
+            yield {"tts_speech": torch.zeros(1, 8), "finish_reason": "eos"}
 
     output_dir = tmp_path / "wav"
     result = run_inference(
-        _FakeCosyVoice(), str(manifest), str(tmp_path), str(output_dir)
+        _FakeCosyVoice(), str(manifest), str(tmp_path), str(output_dir),
+        source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+        decode_config={"max_len_hard_cap": 200},
     )
 
     contract_dir = tmp_path / "contract"

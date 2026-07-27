@@ -8,9 +8,10 @@ from cosyvoice.cli.frontend import CosyVoiceFrontEnd
 class CosyVoiceFrontEnd_Emotion(CosyVoiceFrontEnd):
     """在 zero-shot 前端基础上新增 emotion_ids/intensity_ids 输出。"""
 
+    # target-only 协议（v2 单流）：只保留声学 prompt 条件键（Flow/HiFT 真正消费）。
+    # ``prompt_text`` / ``prompt_text_len`` 已删除 —— LLM 侧只看 target 端的
+    # ``text`` + ``emotion_ids`` + ``intensity_ids``（见 ``model_emo.tts`` 签名）。
     _PROMPT_CONDITIONING_KEYS = (
-        "prompt_text",
-        "prompt_text_len",
         "llm_prompt_speech_token",
         "llm_prompt_speech_token_len",
         "flow_prompt_speech_token",
@@ -54,9 +55,19 @@ class CosyVoiceFrontEnd_Emotion(CosyVoiceFrontEnd):
         return text_token, emotion_ids, intensity_ids
 
     def frontend_emo_film(self, tts_text_with_emo, prompt_text, prompt_wav, resample_rate=24000, zero_shot_spk_id=''):
-        """情感推理前端: 在 standard zero-shot 基础上增加 emotion 字段。
+        """情感推理前端: target-only 单流协议（v2）。
 
-        prompt 段默认情感 neu(3)/low(1)（spec 11.4）。
+        只产出 ``CosyVoice2Model_Emotion.tts`` 真正消费的字段：
+        - target 端三件套：``text`` / ``emotion_ids`` / ``intensity_ids``
+          （从 ``tts_text_with_emo`` 解析）。
+        - 声学 prompt 条件：``flow_embedding`` / ``llm_embedding`` /
+          ``llm_prompt_speech_token`` / ``flow_prompt_speech_token`` /
+          ``prompt_speech_feat`` （从 ``prompt_wav`` 提取，带缓存）。
+
+        v1 残留死字段 ``prompt_emotion_ids`` / ``prompt_intensity_ids`` /
+        ``prompt_text`` / ``prompt_text_len`` 已删除 —— LLM 侧不再消费 prompt
+        端文本/情感（spec 11.4 默认 neu/low 的 prompt 文本路径已废弃，
+        ``tts`` 签名不接受这些 kwargs）。
         """
         # 1. 获取 prompt 端的 embedding 和 speech_token/feat；相同 prompt 只提取一次
         model_input = self._frontend_zero_shot_prompt(
@@ -67,18 +78,11 @@ class CosyVoiceFrontEnd_Emotion(CosyVoiceFrontEnd):
         text_token, emotion_ids, intensity_ids = self._extract_emo_text_token(tts_text_with_emo)
         text_token_len = torch.tensor([text_token.shape[1]], dtype=torch.int32).to(self.device)
 
-        # 3. prompt 文本用纯文本 tokenizer + 默认情感标签
-        prompt_text_token, prompt_text_token_len = self._extract_text_token(prompt_text)
-        prompt_emo_ids = torch.full((1, prompt_text_token.shape[1]), 3, dtype=torch.long).to(self.device)  # neu=3
-        prompt_inten_ids = torch.full((1, prompt_text_token.shape[1]), 1, dtype=torch.long).to(self.device)  # low=1
-
         model_input["text"] = text_token
         model_input["text_len"] = text_token_len
         model_input["emotion_ids"] = emotion_ids
         model_input["emotion_ids_len"] = torch.tensor([emotion_ids.shape[1]], dtype=torch.int32).to(self.device)
         model_input["intensity_ids"] = intensity_ids
         model_input["intensity_ids_len"] = torch.tensor([intensity_ids.shape[1]], dtype=torch.int32).to(self.device)
-        model_input["prompt_emotion_ids"] = prompt_emo_ids
-        model_input["prompt_intensity_ids"] = prompt_inten_ids
 
         return model_input

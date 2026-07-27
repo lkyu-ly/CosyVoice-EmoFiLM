@@ -1,131 +1,447 @@
-"""Emo-FiLM 训练工具: 冻结策略、optimizer 与最小 checkpoint 生命周期。
+"""Emo-FiLM optimizer / scheduler / 冻结 / 最小 checkpoint 生命周期（活跃主线权威）。
 
-DDP 兼容（核实 train_utils.py:100 `DistributedDataParallel(model, find_unused_parameters=True)`）：
-- freeze 应在 wrap_cuda_model **之前** 调用（裸 Module），named_parameters 不带 'module.' 前缀；
-- optimizer 应在 wrap_cuda_model **之后** 调用，但用 `model.module.named_parameters()` 取参数名。
+本模块是 EmoFiLM 的单一活跃训练工具权威（ADR-0020 扁平化）。修复历史死配置：
 
-无论何时调用，本模块都会自动 unwrap DDP 包装，使用 'module.' 前缀剥离后的真实模块名。
+1. **死分组**：历史 ``init_optimizer_emo`` 把全部 trainable（含预训练
+   ``llm_decoder``）塞进单一 emotion_new 组；base 组恒空；新旧 LR 无差异。
+   → 本模块落实 **3 个稳定命名、互斥、非空、完整覆盖 trainable** 的参数组：
+   - ``random_new_condition``：FiLM 随机新增（``emotion_encoder`` / ``emotion_adapter``）
+   - ``downstream_heads``：下游监督任务头随机新增（``emotion_head`` / ``arousal_head``）
+   - ``pretrained_decoder``：预训练 decoder（``llm_decoder``）
+
+2. **死 warmup**：历史 ``ConstantLR(optimizer)`` 不传 scheduler_conf；
+   ``WarmupLR`` 存在但未用；``warmup_steps: 2500`` 是死配置。→ 本模块单一
+   scheduler 工厂：warmup 实际改变前期 LR；constant 拒绝残留 warmup_steps；
+   未知字段启动失败。
+
+复用 ``cosyvoice/utils/scheduler.py`` 已存在的 ``WarmupLR`` / ``ConstantLR`` 类
+（仅 import，不修改它们）。
+
+**默认值声明**：本模块与 ``conf/emo_film.yaml`` 中的 LR / weight_decay 默认值均为
+**工程占位默认**，**非静态审计最优**。正式实验需由调参实验确定。
 """
+from __future__ import annotations
+
 import logging
 import os
-import torch.optim as optim
+from typing import Any, Mapping, Sequence
+
 import torch
+import torch.optim as optim
+
+from cosyvoice.utils.scheduler import ConstantLR, WarmupLR
 
 
-EMOFILM_TRAINABLE_MODULES = (
-    "emotion_encoder",
-    "emotion_adapter",
-    "llm_decoder",
+# ============================================================
+# 三稳定命名参数组（角色 → 模块属性前缀）
+# ============================================================
+
+#: 角色 → 该组覆盖的顶层模块属性名（来自 ``Qwen2LM_Emotion``）。
+OPTIMIZER_PARAM_GROUPS: dict[str, tuple[str, ...]] = {
+    # FiLM 随机新增条件模块（保留自 emo_film.py，随机初始化、可训练）
+    "random_new_condition": ("emotion_encoder", "emotion_adapter"),
+    # 下游监督任务头（随机初始化、可训练；不接收 control ID/loss target）
+    "downstream_heads": ("emotion_head", "arousal_head"),
+    # 预训练 speech-token decoder（base CosyVoice2 llm.pt 含；续训）
+    "pretrained_decoder": ("llm_decoder",),
+}
+
+#: 所有 trainable 前缀（三组并集）；``freeze`` 保留这些、冻结其余。
+_TRAINABLE_PREFIXES: tuple[str, ...] = tuple(
+    prefix for group in OPTIMIZER_PARAM_GROUPS.values() for prefix in group
 )
+
+#: 冻结的顶层模块（主干预冻，显式列出便于审计；精确前缀匹配确保
+#: ``llm.*`` 不吞掉 ``llm_decoder.*``）。
+_FROZEN_PREFIXES: tuple[str, ...] = ("llm", "speech_embedding", "llm_embedding")
+
+
+# ============================================================
+# 已知 / 已消费字段（未知 → 启动失败）
+# ============================================================
+
+_KNOWN_OPTIMIZERS = ("adam", "adamw")
+_KNOWN_SCHEDULERS = ("warmup", "constant")
+
+#: optim_conf 顶层已消费字段。顶层 ``lr`` **不在**此列——它是死字段
+#: （``init_optimizer_emo`` 只读 ``groups[role].lr``），由
+#: ``validate_optim_scheduler_conf`` 显式 hard-fail（票据 06）。
+_CONSUMED_OPTIM_TOP_FIELDS = frozenset({"groups"})
+#: 每个组的已消费字段。
+_CONSUMED_GROUP_FIELDS = frozenset({"lr", "weight_decay"})
+#: scheduler_conf 按 scheduler 类型已消费字段。``constant`` 必须为空集
+#: （残留 ``warmup_steps`` → fail）。
+_CONSUMED_SCHEDULER_FIELDS: dict[str, frozenset[str]] = {
+    "warmup": frozenset({"warmup_steps"}),
+    "constant": frozenset(),
+}
+
+
+# ============================================================
+# helpers
+# ============================================================
 
 
 def _unwrap_model(model):
-    """剥离 DDP 包装，返回底层 Module。
-
-    DDP 包装后 model.named_parameters() 名字带 'module.' 前缀；
-    本 helper 统一返回裸 Module，使外部代码不感知 DDP。
-    """
+    """剥离 DDP 包装，返回裸 Module。"""
     while hasattr(model, "module"):
         model = model.module
     return model
 
 
-def _matches_module_name(param_name, module_name):
+def _matches_module_name(param_name: str, module_name: str) -> bool:
     """精确模块前缀匹配，避免子串歧义。
 
-    匹配规则：param_name == module_name 或 param_name.startswith(module_name + '.')
-    例：module_name='llm_decoder' 匹配 'llm_decoder.weight' 但不匹配 'llm_decoder_backup.weight'。
+    ``"llm_decoder.weight".startswith("llm.")`` 为 False，故 ``llm.*`` 不会吞掉
+    ``llm_decoder.*``（关键边界 case）。
     """
     return param_name == module_name or param_name.startswith(module_name + ".")
 
 
-def freeze_all_except(model, modules_to_unfreeze):
-    """冻结所有参数，只解冻指定模块（精确前缀匹配）。返回可训练参数总数。
+# ============================================================
+# 冻结策略
+# ============================================================
 
-    Args:
-        model: 裸 Module 或 DDP 包装后的 Module（自动 unwrap）
-        modules_to_unfreeze: list[str]，需要解冻的模块名（顶层属性名）
+
+def freeze(model) -> int:
+    """冻结所有参数，只解冻三组 trainable 模块（精确前缀匹配）。
 
     Returns:
-        n_trainable: int，解冻后可训练参数总数
-
-    spec 9.4 要求：
-    - 必须打印可训练参数数 / 总参数数 / 占比
-    - 必须列出每个被解冻的 module name
-    - 兼容 DDP 包装前后
+        n_trainable: 解冻后可训练参数总数。
     """
-    bare_model = _unwrap_model(model)
+    bare = _unwrap_model(model)
+    for _, p in bare.named_parameters():
+        p.requires_grad = False
+    for name, p in bare.named_parameters():
+        if any(_matches_module_name(name, prefix) for prefix in _TRAINABLE_PREFIXES):
+            p.requires_grad = True
 
-    requested = set(modules_to_unfreeze)
-    for name, p in bare_model.named_parameters():
-        p.requires_grad = any(
-            _matches_module_name(name, tm) for tm in EMOFILM_TRAINABLE_MODULES
-        ) and any(
-            _matches_module_name(name, tm) for tm in requested
-        )
-        if _matches_module_name(name, "emotion_classifier"):
-            p.requires_grad = False
-
-    n_trainable = sum(p.numel() for p in bare_model.parameters() if p.requires_grad)
-    n_total = sum(p.numel() for p in bare_model.parameters())
-    pct = 100 * n_trainable / n_total if n_total > 0 else 0
-    logging.info(f"[freeze] Trainable params: {n_trainable:,} / {n_total:,} ({pct:.2f}%)")
-    logging.info(f"[freeze] Unfrozen modules: {modules_to_unfreeze}")
-
-    # 列出实际被解冻的参数名（前 10 条 + 总数），便于 DDP find_unused_parameters 调试
-    trainable_names = [n for n, p in bare_model.named_parameters() if p.requires_grad]
-    logging.info(f"[freeze] Trainable parameter names (first 10 of {len(trainable_names)}):")
+    n_trainable = sum(p.numel() for p in bare.parameters() if p.requires_grad)
+    n_total = sum(p.numel() for p in bare.parameters())
+    pct = 100 * n_trainable / n_total if n_total > 0 else 0.0
+    logging.info(
+        "[freeze] trainable params: %d / %d (%.4f%%)",
+        n_trainable, n_total, pct,
+    )
+    trainable_names = [n for n, p in bare.named_parameters() if p.requires_grad]
+    logging.info("[freeze] trainable parameter names (%d):", len(trainable_names))
     for n in trainable_names[:10]:
-        logging.info(f"  {n}")
-
+        logging.info("  %s", n)
     return n_trainable
 
 
-def init_optimizer_emo(model, configs):
-    """构建 optimizer，按 new_params vs base 分组 lr。
+# ============================================================
+# 配置校验（启动失败 on unknown / 未消费字段）
+# ============================================================
 
-    configs['train_conf']['optim_conf']['new_params_lr'] 用于 emotion 模块，
-    configs['train_conf']['optim_conf']['lr'] 用于其它 requires_grad 参数。
 
-    自动 unwrap DDP 包装。emotion_module_names 用精确前缀匹配（同 freeze_all_except）。
+def validate_optim_scheduler_conf(conf: Mapping[str, Any]) -> None:
+    """启动时拒绝未知 / 未消费的 optim / scheduler 字段。
+
+    检查项：
+    - ``conf["optim"]`` ∈ {adam, adamw}；
+    - ``conf["optim_conf"]`` 顶层**不得出现** ``lr``（死字段：训练只读
+      ``groups[role].lr``，改顶层 lr 不生效也不报错 → 显式 hard-fail，
+      票据 06）；
+    - ``conf["optim_conf"]`` 其余顶层键 ⊆ ``_CONSUMED_OPTIM_TOP_FIELDS``；
+    - ``conf["optim_conf"]["groups"]`` 角色 ⊆ ``OPTIMIZER_PARAM_GROUPS.keys()``；
+    - 每组键 ⊆ ``_CONSUMED_GROUP_FIELDS``；
+    - ``conf["scheduler"]`` ∈ {warmup, constant}；
+    - ``conf["scheduler_conf"]`` 键 ⊆ 该 scheduler 的已消费字段
+      （``constant`` 必须为空集）。
     """
-    conf = configs["train_conf"]
-    new_params_lr = conf["optim_conf"].get("new_params_lr", conf["optim_conf"]["lr"])
-    base_lr = conf["optim_conf"]["lr"]
+    if not isinstance(conf, Mapping):
+        raise ValueError("train_conf must be a mapping")
 
-    bare_model = _unwrap_model(model)
-    emotion_module_names = set(EMOFILM_TRAINABLE_MODULES)
+    # optim
+    optim = conf.get("optim")
+    if optim not in _KNOWN_OPTIMIZERS:
+        raise ValueError(
+            f"unknown optimizer {optim!r}; expected one of {list(_KNOWN_OPTIMIZERS)}"
+        )
 
-    new_params = []
-    base_params = []
-    for name, p in bare_model.named_parameters():
-        if not p.requires_grad:
-            continue
-        if _matches_module_name(name, "emotion_classifier"):
-            continue
-        if any(_matches_module_name(name, em) for em in emotion_module_names):
-            new_params.append(p)
-        else:
-            base_params.append(p)
+    optim_conf = conf.get("optim_conf", {})
+    if not isinstance(optim_conf, Mapping):
+        raise ValueError("optim_conf must be a mapping")
+    # 顶层 lr 是死字段：init_optimizer_emo 只读 groups[role].lr，改顶层 lr
+    # 不生效也不报错。显式 hard-fail 消除死配置（票据 06）。
+    if "lr" in optim_conf:
+        raise ValueError(
+            "顶层 optim_conf.lr 是死字段（训练只读 groups[role].lr）；"
+            "请移除顶层 lr，改用 optim_conf.groups[role].lr 配置每组学习率"
+        )
+    unknown_top = set(optim_conf.keys()) - _CONSUMED_OPTIM_TOP_FIELDS
+    if unknown_top:
+        raise ValueError(
+            f"unknown optim_conf fields: {sorted(unknown_top)} "
+            f"(consumed: {sorted(_CONSUMED_OPTIM_TOP_FIELDS)})"
+        )
 
+    groups = optim_conf.get("groups", {})
+    if not isinstance(groups, Mapping):
+        raise ValueError("optim_conf.groups must be a mapping")
+    unknown_roles = set(groups.keys()) - set(OPTIMIZER_PARAM_GROUPS.keys())
+    if unknown_roles:
+        raise ValueError(
+            f"unknown optimizer group roles: {sorted(unknown_roles)} "
+            f"(expected: {sorted(OPTIMIZER_PARAM_GROUPS.keys())})"
+        )
+    # 必须三组全到齐（formal 拓扑）
+    missing_roles = set(OPTIMIZER_PARAM_GROUPS.keys()) - set(groups.keys())
+    if missing_roles:
+        raise ValueError(
+            f"missing optimizer group roles: {sorted(missing_roles)} "
+            f"(all three required: {sorted(OPTIMIZER_PARAM_GROUPS.keys())})"
+        )
+    for role, gcfg in groups.items():
+        if not isinstance(gcfg, Mapping):
+            raise ValueError(f"group {role!r} config must be a mapping")
+        unknown_g = set(gcfg.keys()) - _CONSUMED_GROUP_FIELDS
+        if unknown_g:
+            raise ValueError(
+                f"unknown fields in group {role!r}: {sorted(unknown_g)} "
+                f"(consumed: {sorted(_CONSUMED_GROUP_FIELDS)})"
+            )
+        for key in ("lr", "weight_decay"):
+            if key not in gcfg:
+                raise ValueError(
+                    f"group {role!r} missing required field {key!r}"
+                )
+
+    # scheduler
+    sched = conf.get("scheduler")
+    if sched not in _KNOWN_SCHEDULERS:
+        raise ValueError(
+            f"unknown scheduler {sched!r}; expected one of {list(_KNOWN_SCHEDULERS)}"
+        )
+    sched_conf = conf.get("scheduler_conf", {}) or {}
+    if not isinstance(sched_conf, Mapping):
+        raise ValueError("scheduler_conf must be a mapping")
+    consumed = _CONSUMED_SCHEDULER_FIELDS[sched]
+    unknown_sched = set(sched_conf.keys()) - consumed
+    if unknown_sched:
+        raise ValueError(
+            f"unknown {sched!r} scheduler_conf fields: {sorted(unknown_sched)} "
+            f"(consumed by {sched!r}: {sorted(consumed) or '{}'})"
+        )
+    # warmup 必须有 warmup_steps
+    if sched == "warmup":
+        if "warmup_steps" not in sched_conf:
+            raise ValueError(
+                "scheduler=warmup requires scheduler_conf.warmup_steps"
+            )
+        ws = sched_conf["warmup_steps"]
+        if not isinstance(ws, int) or isinstance(ws, bool) or ws <= 0:
+            raise ValueError(
+                f"warmup_steps must be a positive int, got {ws!r}"
+            )
+
+
+# ============================================================
+# 组覆盖不变量校验（启动时）
+# ============================================================
+
+
+def _validate_group_coverage(
+    bare_model,
+    groups: Mapping[str, Sequence[torch.nn.Parameter]],
+) -> None:
+    """启动时校验三组不变量。
+
+    - 每组非空；
+    - 组间参数 id 无交集（互斥）；
+    - 并集 = 全体 requires_grad=True 参数（完整覆盖）；
+    - 无 requires_grad=False 参数混入任何组。
+    """
+    # 非空
+    for role, params in groups.items():
+        if not params:
+            raise ValueError(
+                f"optimizer group {role!r} is empty "
+                "(formal topology requires all three groups to have params)"
+            )
+    # 互斥（id 无交集）
+    ids_per_group = {role: {id(p) for p in params} for role, params in groups.items()}
+    roles = list(ids_per_group)
+    for i in range(len(roles)):
+        for j in range(i + 1, len(roles)):
+            overlap = ids_per_group[roles[i]] & ids_per_group[roles[j]]
+            if overlap:
+                raise ValueError(
+                    f"optimizer groups {roles[i]!r} and {roles[j]!r} share "
+                    f"{len(overlap)} param id(s) (must be mutually exclusive)"
+                )
+    # 完整覆盖
+    grouped_ids = set().union(*ids_per_group.values())
+    trainable_ids = {id(p) for p in bare_model.parameters() if p.requires_grad}
+    missing = trainable_ids - grouped_ids
+    if missing:
+        raise ValueError(
+            f"{len(missing)} trainable param(s) not covered by any optimizer group"
+        )
+    extra = grouped_ids - trainable_ids
+    if extra:
+        raise ValueError(
+            f"{len(extra)} param(s) in groups are not requires_grad=True "
+            "(frozen params leaked into a group)"
+        )
+
+
+# ============================================================
+# optimizer 构建
+# ============================================================
+
+
+def init_optimizer_emo(model, conf: Mapping[str, Any]):
+    """构建 optimizer：3 个稳定命名组，每组独立 LR + weight_decay。
+
+    Args:
+        model: 裸 Module 或 DDP 包装后的 Module（自动 unwrap）。调用方应先
+            ``freeze(model)``；本函数仅消费 ``requires_grad=True`` 参数。
+        conf: ``train_conf`` 映射（**非**完整 configs），结构为::
+
+            optim: adam | adamw
+            optim_conf:                        # 顶层不得出现 lr（死字段，票据 06）
+              groups:
+                random_new_condition: {lr, weight_decay}
+                downstream_heads:    {lr, weight_decay}
+                pretrained_decoder:   {lr, weight_decay}
+            scheduler: warmup | constant
+
+    Returns:
+        torch.optim.Optimizer（参数组 ``name`` 字段 = 角色名）。
+
+    Raises:
+        ValueError: 三组任一为空、组间参数 id 交集、trainable 参数未覆盖、
+            冻结参数混入组。
+    """
+    validate_optim_scheduler_conf(conf)
+
+    bare = _unwrap_model(model)
+
+    # 按角色前缀分桶（仅 requires_grad 参数）
+    groups: dict[str, list[torch.nn.Parameter]] = {}
+    for role, prefixes in OPTIMIZER_PARAM_GROUPS.items():
+        bucket: list[torch.nn.Parameter] = []
+        for name, p in bare.named_parameters():
+            if not p.requires_grad:
+                continue
+            if any(_matches_module_name(name, prefix) for prefix in prefixes):
+                bucket.append(p)
+        groups[role] = bucket
+
+    _validate_group_coverage(bare, groups)
+
+    group_confs = conf["optim_conf"]["groups"]
     param_groups = []
-    if new_params:
-        param_groups.append({"params": new_params, "lr": new_params_lr, "name": "emotion_new"})
-    if base_params:
-        param_groups.append({"params": base_params, "lr": base_lr, "name": "base"})
+    for role, params in groups.items():
+        gcfg = group_confs[role]
+        param_groups.append(
+            {
+                "params": params,
+                "lr": float(gcfg["lr"]),
+                "weight_decay": float(gcfg["weight_decay"]),
+                "name": role,
+            }
+        )
 
     if conf["optim"] == "adam":
         optimizer = optim.Adam(param_groups)
     elif conf["optim"] == "adamw":
         optimizer = optim.AdamW(param_groups)
-    else:
+    else:  # pragma: no cover - validate_optim_scheduler_conf 已拦截
         raise ValueError(f"unknown optimizer: {conf['optim']}")
 
-    logging.info(f"[optimizer] {len(param_groups)} param groups:")
+    logging.info("[optimizer] %d param groups:", len(param_groups))
     for pg in param_groups:
         n_params = sum(p.numel() for p in pg["params"])
-        logging.info(f"  {pg['name']}: {len(pg['params'])} tensors, {n_params:,} params, lr={pg['lr']}")
+        logging.info(
+            "  %s: %d tensors, %d params, lr=%g, weight_decay=%g",
+            pg["name"], len(pg["params"]), n_params, pg["lr"], pg["weight_decay"],
+        )
     return optimizer
+
+
+# ============================================================
+# scheduler 构建（单一工厂）
+# ============================================================
+
+
+def build_scheduler(optimizer, conf: Mapping[str, Any]):
+    """单一 scheduler 工厂。
+
+    - ``scheduler=warmup`` → ``WarmupLR(optimizer, warmup_steps=...)``，
+      warmup **实际**改变前期 LR（``get_lr`` 在 step<warmup 时 LR<base_lr）。
+    - ``scheduler=constant`` → ``ConstantLR(optimizer)``，且 ``scheduler_conf``
+      **不得**残留 ``warmup_steps`` 字段（否则 fail）。
+    - 未知 scheduler / 未消费字段 → ValueError。
+
+    复用 ``cosyvoice/utils/scheduler.py`` 的 ``WarmupLR`` / ``ConstantLR`` 类，
+    不修改它们。
+    """
+    validate_optim_scheduler_conf(conf)
+    sched = conf["scheduler"]
+    sched_conf = conf.get("scheduler_conf", {}) or {}
+
+    if sched == "warmup":
+        ws = int(sched_conf["warmup_steps"])
+        return WarmupLR(optimizer, warmup_steps=ws)
+    if sched == "constant":
+        return ConstantLR(optimizer)
+    # pragma: no cover - validate_optim_scheduler_conf 已拦截
+    raise ValueError(f"unknown scheduler: {sched!r}")
+
+
+# ============================================================
+# optimizer / scheduler 身份摘要（绑定到训练 identity）
+# ============================================================
+
+
+def summarize_optimizer_identity(
+    model,
+    optimizer,
+    scheduler,
+    conf: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """记录每个 optimizer 参数组的张量数 / 参数数 / 初始 LR / weight_decay +
+    scheduler 类型与关键参数。
+
+    此摘要被 ``write_emofilm_train_identity`` 绑定到训练 identity
+    （schema_version=2）。
+    """
+    group_stats = []
+    for pg in optimizer.param_groups:
+        params = pg["params"]
+        group_stats.append(
+            {
+                "role": pg.get("name", "?"),
+                "tensor_count": len(params),
+                "param_count": int(sum(p.numel() for p in params)),
+                "initial_lr": float(pg["lr"]),
+                "weight_decay": float(pg.get("weight_decay", 0.0)),
+            }
+        )
+
+    # scheduler 类型 + 关键参数（用 isinstance 而非类名字符串，避免 scheduler
+    # 被子类化时类型描述失真）
+    sched_type = type(scheduler).__name__
+    key_params: dict[str, Any] = {}
+    if isinstance(scheduler, WarmupLR):
+        key_params["warmup_steps"] = int(getattr(scheduler, "warmup_steps", -1))
+    # ConstantLR 无关键参数（key_params 保持空 dict）
+
+    return {
+        "param_groups": group_stats,
+        "scheduler": {
+            "type": sched_type,
+            "key_params": key_params,
+        },
+    }
+
+
+# ============================================================
+# 最小 checkpoint 生命周期（latest → final 原子收口）
+# ============================================================
 
 
 def _model_state_dict(model):
@@ -165,3 +481,15 @@ def finalize_latest_checkpoint(model_dir):
         raise FileNotFoundError(latest_path)
     os.replace(latest_path, final_path)
     return final_path
+
+
+__all__ = [
+    "OPTIMIZER_PARAM_GROUPS",
+    "freeze",
+    "validate_optim_scheduler_conf",
+    "init_optimizer_emo",
+    "build_scheduler",
+    "summarize_optimizer_identity",
+    "save_latest_checkpoint",
+    "finalize_latest_checkpoint",
+]

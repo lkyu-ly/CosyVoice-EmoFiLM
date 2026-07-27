@@ -62,14 +62,25 @@ def label_manifest(model, entries, skip_labeled=False, batch_size=32):
             new_entries[i]["emo2vec_label"] = map_label(labels[top])
             new_entries[i]["emo2vec_score"] = float(scores[top])
 
-    # 一致性统计（覆盖全部条目，含 skip 复用的旧标签）
+    # 一致性统计（覆盖全部条目，含 skip 复用的旧标签）+ 行级失败清单（B14）。
     stats = {}
+    failed_utts: list[dict] = []
     for e in new_entries:
         part = e.get("part", "?")
         s = stats.setdefault(part, {"total": 0, "passed": 0})
         s["total"] += 1
-        if e["emo2vec_label"] in (e.get("emo_from"), e.get("emo_to")):
+        passed = e["emo2vec_label"] in (e.get("emo_from"), e.get("emo_to"))
+        if passed:
             s["passed"] += 1
+        else:
+            failed_utts.append({
+                "utt_id": e.get("utt_id"),
+                "part": part,
+                "emo_from": e.get("emo_from"),
+                "emo_to": e.get("emo_to"),
+                "emo2vec_label": e["emo2vec_label"],
+                "emo2vec_score": e.get("emo2vec_score"),
+            })
 
     total = sum(s["total"] for s in stats.values())
     passed = sum(s["passed"] for s in stats.values())
@@ -81,6 +92,9 @@ def label_manifest(model, entries, skip_labeled=False, batch_size=32):
             p: {**s, "pass_rate": round(s["passed"] / s["total"], 4) if s["total"] else 0.0}
             for p, s in sorted(stats.items())
         },
+        # B14: 行级不一致清单——供 eval --exclude_utts_file 排除（不进 exact 分母）。
+        "failed_utts": failed_utts,
+        "n_failed": len(failed_utts),
     }
     return new_entries, report
 
@@ -93,6 +107,8 @@ def main():
     ap.add_argument("--model_id", default="iic/emotion2vec_plus_large")
     ap.add_argument("--skip_labeled", action="store_true")
     ap.add_argument("--batch_size", type=int, default=32, help="GPU 批大小（默认 32）")
+    ap.add_argument("--no_write_back", action="store_true",
+                    help="只产 report 不回写 manifest（避免覆写冻结 v1 manifest，B14）")
     args = ap.parse_args()
 
     entries = [json.loads(l) for l in open(args.manifest, encoding="utf-8") if l.strip()]
@@ -107,11 +123,12 @@ def main():
     new_entries, report = label_manifest(
         model, entries, skip_labeled=args.skip_labeled, batch_size=args.batch_size)
 
-    tmp = args.manifest + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        for e in new_entries:
-            f.write(json.dumps(e, ensure_ascii=False) + "\n")
-    os.replace(tmp, args.manifest)
+    if not args.no_write_back:
+        tmp = args.manifest + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for e in new_entries:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        os.replace(tmp, args.manifest)
 
     os.makedirs(os.path.dirname(args.report) or ".", exist_ok=True)
     with open(args.report, "w", encoding="utf-8") as f:

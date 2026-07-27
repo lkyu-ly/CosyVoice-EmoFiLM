@@ -3,6 +3,7 @@
 不实际加载 CosyVoice2 模型（避免依赖 5GB 权重）；
 仅测试 ckpt 过滤、prompt 选择等纯逻辑。
 """
+import hashlib
 import os
 import sys
 
@@ -200,12 +201,16 @@ def test_run_inference_resolves_relative_prompt_against_workspace(tmp_path, monk
         str(workspace / "datasets" / "ESD"),
         str(tmp_path / "out"),
         workspace_root=str(workspace),
+        source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+        decode_config={"max_len_hard_cap": 200},
     )
 
     assert cv2.calls[0]["prompt_wav_path"] == str(prompt)
 
 
-def test_run_inference_fails_when_generation_returns_no_audio(tmp_path, monkeypatch):
+def test_run_inference_empty_generation_produces_diagnostic_row(tmp_path, monkeypatch):
+    """空生成（无 chunk）→ finish_reason=sampler_error 诊断 row，不写 WAV。"""
+    import tools.inference_emo_film as mod
     from tools.inference_emo_film import run_inference
 
     prompt = tmp_path / "prompt.wav"
@@ -213,9 +218,10 @@ def test_run_inference_fails_when_generation_returns_no_audio(tmp_path, monkeypa
     manifest = tmp_path / "m.jsonl"
     _write_jsonl(
         manifest,
-        [{"utt_id": "u0", "text": "text", "prompt_wav": str(prompt), "prompt_text": "ref"}],
+        [{"utt_id": "u0", "text": "text", "prompt_wav": str(prompt), "prompt_text": "ref",
+          "control_row_ref": "c0", "prompt_row_ref": "p0"}],
     )
-    monkeypatch.setattr(__import__("tools.inference_emo_film", fromlist=["torchaudio"]).torchaudio, "save", lambda *a, **k: None)
+    monkeypatch.setattr(mod.torchaudio, "save", lambda *a, **k: None)
 
     class _EmptyCV2:
         sample_rate = 24000
@@ -224,8 +230,16 @@ def test_run_inference_fails_when_generation_returns_no_audio(tmp_path, monkeypa
             if False:
                 yield kwargs
 
-    with pytest.raises(RuntimeError, match="no audio"):
-        run_inference(_EmptyCV2(), str(manifest), str(tmp_path), str(tmp_path / "out"))
+    results = run_inference(_EmptyCV2(), str(manifest), str(tmp_path), str(tmp_path / "out"),
+                            seed=1986, source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                            decode_config={"min_token_text_ratio": 2, "max_token_text_ratio": 20,
+                                           "max_len_hard_cap": 2000})
+    r = results[0]
+    # 空生成 → sampler_error（不 raise、不写 WAV）
+    assert r["finish_reason"] == "sampler_error"
+    assert "wav_path" not in r
+    assert r["status"] == "non_eos_diagnostic"
+    assert r["seed"] == 1986
 
 
 def test_run_inference_propagates_runtime_failure(tmp_path, monkeypatch):
@@ -281,7 +295,7 @@ class _FakeCV2Runner:
             self.manifest_snapshots.append(n)
         self.calls.append({"text_with_emo": text_with_emo,
                            "prompt_wav_path": prompt_wav_path})
-        yield {"tts_speech": torch.zeros(1, 100)}
+        yield {"tts_speech": torch.zeros(1, 100), "finish_reason": "eos"}
 
 
 def test_run_inference_shard_selection(tmp_path, monkeypatch):
@@ -302,7 +316,9 @@ def test_run_inference_shard_selection(tmp_path, monkeypatch):
     out = tmp_path / "out"
     cv2 = _FakeCV2Runner()
     run_inference(cv2, str(manifest), str(tmp_path), str(out),
-                  num_shards=3, shard_idx=1)
+                  num_shards=3, shard_idx=1,
+                  source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                  decode_config={"max_len_hard_cap": 200})
 
     # entries[1::3] of 6 = indices 1, 4
     assert sorted(c["text_with_emo"] for c in cv2.calls) == ["txt1", "txt4"]
@@ -313,33 +329,56 @@ def test_run_inference_shard_selection(tmp_path, monkeypatch):
 
 
 def test_run_inference_skip_existing(tmp_path, monkeypatch):
-    """Pre-placed out_wav → status=skipped_existing, cv2 not called for that utt."""
+    """skip_existing: 既有 row 身份匹配 + WAV 存在 → 跳过；身份不匹配 → 重生成。"""
     import json
     import tools.inference_emo_film as mod
     from tools.inference_emo_film import run_inference
 
+    decode_cfg = {"min_token_text_ratio": 5.0, "max_token_text_ratio": 25.0,
+                  "max_len_hard_cap": 600}
+
     prompt = tmp_path / "prompt.wav"
     prompt.write_bytes(b"dummy")
-    utts = [{"utt_id": "u0", "text": "t0", "prompt_wav": str(prompt), "prompt_text": "ref"},
-            {"utt_id": "u1", "text": "t1", "prompt_wav": str(prompt), "prompt_text": "ref"}]
+    utts = [{"utt_id": "u0", "text": "t0", "prompt_wav": str(prompt), "prompt_text": "ref",
+             "control_row_ref": "ctrl/u0", "prompt_row_ref": "prompt/u0"},
+            {"utt_id": "u1", "text": "t1", "prompt_wav": str(prompt), "prompt_text": "ref",
+             "control_row_ref": "ctrl/u1", "prompt_row_ref": "prompt/u1"}]
     manifest = tmp_path / "m.jsonl"
     _write_jsonl(manifest, utts)
-
-    monkeypatch.setattr(mod.torchaudio, "save", lambda *a, **k: None)
 
     out = tmp_path / "out"
     out.mkdir()
     (out / "u0.wav").write_bytes(b"already-there")  # pre-place existing output
 
+    # Pre-write existing manifest with matching identity for u0 (seed=1986)
+    existing_manifest = tmp_path / "inference_out.jsonl"
+    existing_row = {
+        "utt_id": "u0", "finish_reason": "eos",
+        "source_revision": "9c6d84b", "checkpoint_sha256": "a" * 64,
+        "control_row_ref": "ctrl/u0", "prompt_row_ref": "prompt/u0",
+        "decode_config": decode_cfg, "seed": 1986,
+        "wav_path": "out/u0.wav",
+        # B6: 合成输入摘要需与请求侧匹配，否则指纹不等 → 不 skip
+        "text_digest": hashlib.sha256(b"t0").hexdigest(),
+        "prompt_audio_ref": "prompt.wav",
+    }
+    existing_manifest.write_text(json.dumps(existing_row) + "\n")
+
+    monkeypatch.setattr(mod.torchaudio, "save", lambda *a, **k: None)
+
     cv2 = _FakeCV2Runner()
     results = run_inference(cv2, str(manifest), str(tmp_path), str(out),
-                            skip_existing=True)
+                            skip_existing=True, seed=1986,
+                            source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                            decode_config=decode_cfg, workspace_root=str(tmp_path))
 
     by_id = {r["utt_id"]: r for r in results}
+    # u0 identity matches → skipped (cv2 not called)
     assert by_id["u0"]["status"] == "skipped_existing"
-    assert by_id["u0"]["wav_path"] == str(out / "u0.wav")
-    assert by_id["u1"]["status"] == "success"
-    # cv2.inference_emo_film called only for u1 (skipped utt not synthesized)
+    assert by_id["u0"]["wav_path"] == "out/u0.wav"
+    # u1 no existing row → generated
+    assert by_id["u1"]["finish_reason"] == "eos"
+    # cv2.inference_emo_film called only for u1
     assert [c["text_with_emo"] for c in cv2.calls] == ["t1"]
 
 
@@ -361,7 +400,9 @@ def test_run_inference_periodic_save(tmp_path, monkeypatch):
     out = tmp_path / "out"
     manifest_path = tmp_path / "inference_out.jsonl"
     cv2 = _FakeCV2Runner(str(manifest_path))
-    run_inference(cv2, str(manifest), str(tmp_path), str(out), save_every=2)
+    run_inference(cv2, str(manifest), str(tmp_path), str(out), save_every=2,
+                  source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                  decode_config={"max_len_hard_cap": 200})
 
     # During the 3rd inference call the manifest must already hold 2 rows —
     # proves a periodic write fired after the 2nd result was appended.
@@ -393,6 +434,8 @@ def test_run_inference_logs_fixed_interval_progress(tmp_path, monkeypatch, caplo
             str(tmp_path / "out"),
             save_every=2,
             shard_idx=0,
+            source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+            decode_config={"max_len_hard_cap": 200},
         )
 
     messages = [record.getMessage() for record in caplog.records]
@@ -415,8 +458,179 @@ def test_run_inference_shard_manifest_naming(tmp_path, monkeypatch):
     out = tmp_path / "out"
     cv2 = _FakeCV2Runner()
     run_inference(cv2, str(manifest), str(tmp_path), str(out),
-                  num_shards=2, shard_idx=0)
+                  num_shards=2, shard_idx=0,
+                  source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                  decode_config={"max_len_hard_cap": 200})
 
     assert (tmp_path / "inference_out.shard0.jsonl").is_file()
     # in shard mode the per-process script must NOT write the plain merged name
     assert not (tmp_path / "inference_out.jsonl").is_file()
+
+
+# ============================================================
+# Task 4 / #5: GenerationRow + seed + per-utt reset + 安全 skip
+# ============================================================
+
+
+def test_run_inference_writes_generation_row_with_seed(tmp_path, monkeypatch):
+    """产物 row 含 seed + 四族身份，过 validate_generation_row。"""
+    import json
+    import tools.inference_emo_film as mod
+    from tools.inference_emo_film import run_inference
+    from tools.build_emofilm_contract import validate_generation_row
+
+    decode_cfg = {"min_token_text_ratio": 2, "max_token_text_ratio": 20,
+                  "max_len_hard_cap": 2000}
+    prompt = tmp_path / "prompt.wav"
+    prompt.write_bytes(b"dummy")
+    manifest = tmp_path / "m.jsonl"
+    _write_jsonl(manifest, [{"utt_id": "u1", "text": "hi", "tagged_text": "<emotion>hi</emotion>",
+                             "prompt_wav": str(prompt), "prompt_text": "ref",
+                             "control_row_ref": "ctrl/u1", "prompt_row_ref": "prompt/spk1"}])
+    monkeypatch.setattr(mod.torchaudio, "save", lambda *a, **k: None)
+
+    rows = run_inference(_FakeCV2Runner(), str(manifest), str(tmp_path),
+                         str(tmp_path / "out"),
+                         llm_ckpt_sha="a" * 64, source_revision="9c6d84b",
+                         seed=1986, decode_config=decode_cfg,
+                         workspace_root=str(tmp_path))
+    r = rows[0]
+    assert r["finish_reason"] == "eos"
+    assert r["seed"] == 1986
+    assert r["source_revision"] == "9c6d84b"
+    assert r["checkpoint_sha256"] == "a" * 64
+    assert r["control_row_ref"] == "ctrl/u1"
+    assert r["prompt_row_ref"] == "prompt/spk1"
+    assert r["decode_config"] == decode_cfg
+    # wav_path 是 workspace-relative POSIX
+    assert "/" in r["wav_path"]
+    assert not r["wav_path"].startswith("/")
+    # 过 validate_generation_row（含 seed + 四族身份齐全）
+    validate_generation_row(r)
+
+
+def test_per_utt_seed_reset_reproducible(tmp_path, monkeypatch):
+    """per-utt RNG 重置：同 seed → 每个 utt 捕获相同的随机序列（可复现）。"""
+    import tools.inference_emo_film as mod
+    from tools.inference_emo_film import run_inference
+
+    decode_cfg = {"min_token_text_ratio": 2, "max_token_text_ratio": 20,
+                  "max_len_hard_cap": 2000}
+    prompt = tmp_path / "prompt.wav"
+    prompt.write_bytes(b"dummy")
+    utts = [{"utt_id": f"u{i}", "text": "txt", "prompt_wav": str(prompt),
+             "prompt_text": "ref", "control_row_ref": f"c{i}", "prompt_row_ref": f"p{i}"}
+            for i in range(3)]
+    manifest = tmp_path / "m.jsonl"
+    _write_jsonl(manifest, utts)
+    monkeypatch.setattr(mod.torchaudio, "save", lambda *a, **k: None)
+
+    class _SeedCapturingCV2:
+        """捕获 inference_emo_film 入口时的 torch RNG 随机序列。"""
+        sample_rate = 24000
+
+        def __init__(self):
+            self.captured = []
+
+        def inference_emo_film(self, **kwargs):
+            self.captured.append(torch.randn(4).clone())
+            yield {"tts_speech": torch.zeros(1, 100), "finish_reason": "eos"}
+
+    cv2_run1 = _SeedCapturingCV2()
+    run_inference(cv2_run1, str(manifest), str(tmp_path), str(tmp_path / "out"),
+                  seed=1986, source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                  decode_config=decode_cfg)
+
+    cv2_run2 = _SeedCapturingCV2()
+    run_inference(cv2_run2, str(manifest), str(tmp_path), str(tmp_path / "out2"),
+                  seed=1986, source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                  decode_config=decode_cfg)
+
+    # per-utt reset：同一 run 内每个 utt 捕获相同的随机序列
+    assert len(cv2_run1.captured) == 3
+    assert torch.equal(cv2_run1.captured[0], cv2_run1.captured[1])
+    assert torch.equal(cv2_run1.captured[1], cv2_run1.captured[2])
+    # 跨 run 可复现：两次 run 的序列完全一致
+    assert len(cv2_run2.captured) == 3
+    for i in range(3):
+        assert torch.equal(cv2_run1.captured[i], cv2_run2.captured[i])
+
+
+def test_non_eos_skips_wav(tmp_path, monkeypatch):
+    """LLM 返 max_len_reached → 不写 wav、row 无 wav_path、finish_reason 正确。"""
+    import tools.inference_emo_film as mod
+    from tools.inference_emo_film import run_inference
+
+    decode_cfg = {"min_token_text_ratio": 2, "max_token_text_ratio": 20,
+                  "max_len_hard_cap": 2000}
+    prompt = tmp_path / "prompt.wav"
+    prompt.write_bytes(b"dummy")
+    manifest = tmp_path / "m.jsonl"
+    _write_jsonl(manifest, [{"utt_id": "u1", "text": "hi",
+                             "prompt_wav": str(prompt), "prompt_text": "ref",
+                             "control_row_ref": "c1", "prompt_row_ref": "p1"}])
+    monkeypatch.setattr(mod.torchaudio, "save", lambda *a, **k: None)
+
+    class _NonEosCV2:
+        """模拟 LLM 到达 max_len 未出 EOS。"""
+        sample_rate = 24000
+
+        def inference_emo_film(self, **kwargs):
+            yield {"tts_speech": None, "finish_reason": "max_len_reached"}
+
+    rows = run_inference(_NonEosCV2(), str(manifest), str(tmp_path),
+                         str(tmp_path / "wav"),
+                         seed=1986, source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                         decode_config=decode_cfg, workspace_root=str(tmp_path))
+    r = rows[0]
+    assert r["finish_reason"] == "max_len_reached"
+    assert "wav_path" not in r
+    assert r["seed"] == 1986
+    assert not (tmp_path / "wav" / "u1.wav").exists()
+
+
+def test_skip_existing_seed_change_not_reused(tmp_path, monkeypatch):
+    """既有 row seed=1986，请求 seed=42 → 指纹不同 → 不 skip（重生成）。"""
+    import json
+    import tools.inference_emo_film as mod
+    from tools.inference_emo_film import run_inference
+
+    decode_cfg = {"min_token_text_ratio": 5.0, "max_token_text_ratio": 25.0,
+                  "max_len_hard_cap": 600}
+    prompt = tmp_path / "prompt.wav"
+    prompt.write_bytes(b"dummy")
+    manifest = tmp_path / "m.jsonl"
+    _write_jsonl(manifest, [{"utt_id": "u0", "text": "t0",
+                             "prompt_wav": str(prompt), "prompt_text": "ref",
+                             "control_row_ref": "ctrl/u0", "prompt_row_ref": "prompt/u0"}])
+
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "u0.wav").write_bytes(b"existing-wav")
+
+    # 既有 manifest row（seed=1986，身份与请求匹配除了 seed）
+    existing_manifest = tmp_path / "inference_out.jsonl"
+    existing_row = {
+        "utt_id": "u0", "finish_reason": "eos",
+        "source_revision": "9c6d84b", "checkpoint_sha256": "a" * 64,
+        "control_row_ref": "ctrl/u0", "prompt_row_ref": "prompt/u0",
+        "decode_config": decode_cfg, "seed": 1986,
+        "wav_path": "out/u0.wav",
+    }
+    existing_manifest.write_text(json.dumps(existing_row) + "\n")
+
+    monkeypatch.setattr(mod.torchaudio, "save", lambda *a, **k: None)
+
+    cv2 = _FakeCV2Runner()
+    results = run_inference(cv2, str(manifest), str(tmp_path), str(out),
+                            skip_existing=True, seed=42,  # 不同 seed
+                            source_revision="9c6d84b", llm_ckpt_sha="a" * 64,
+                            decode_config=decode_cfg, workspace_root=str(tmp_path))
+
+    r = results[0]
+    # seed=42 != 1986 → 指纹不同 → 不 skip → 重新生成
+    assert r["finish_reason"] == "eos"
+    assert r["seed"] == 42  # 新 seed（不是旧 1986）
+    assert r["status"] == "success"
+    # cv2 被调用了（证明未跳过）
+    assert len(cv2.calls) == 1
