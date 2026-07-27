@@ -6,7 +6,7 @@ generation/evaluation 身份与安全恢复链（ticket 11），成为唯一的 
 v1 入口 ``write_run_identity`` 签名与行为原样保留（schema_version=1，
 contract_name="emofilm_v1"——v1 历史产物身份，冻结只读）；
 活跃 EmoFiLM 入口（``write_emofilm_train_identity`` /
-``write_emofilm_generation_identity`` / ``write_emofilm_evaluation_identity``）
+``write_emofilm_generation_identity``）
 绑定 schema_version=2 逐条身份，活跃合同名 ``contract_name="emofilm"``。
 产物身份用 ``wav_path`` + 结构化身份字段，不含 WAV 内容哈希字段（ADR-0020 §3）。
 """
@@ -872,90 +872,6 @@ def check_skip_existing(
 
 
 # ============================================================
-# C. 逐条 evaluation 身份 + aggregate 身份
-# ============================================================
-
-
-def eval_row_identity_fingerprint(row: Mapping[str, Any]) -> str:
-    """计算 evaluation row 的逐条身份指纹（SHA-256）。
-
-    指纹覆盖：
-    - generation row 引用（generation_row_ref / generation_row）
-    - 控制 span 引用（control_span_ref / control_span）
-    - evaluator 身份（name + version + label_space 等）
-    - boundary_evidence_tier（exact / approximate）
-    - metrics（逐样本/逐 span 指标——绑定用于审计）
-
-    任一变化 → 不同指纹 → aggregate 检测到不一致。
-    """
-    payload = _canonical_json({
-        "generation": _extract_ref_or_mapping_digest(
-            row, str_ref_key="generation_row_ref", mapping_key="generation_row",
-        ),
-        "control_span": _extract_ref_or_mapping_digest(
-            row, str_ref_key="control_span_ref", mapping_key="control_span",
-        ),
-        "evaluator": _canonical_json(dict(row.get("evaluator", {}))),
-        "boundary_evidence_tier": str(row.get("boundary_evidence_tier", "")),
-        "metrics": _canonical_json(dict(row.get("metrics", {}))),
-    })
-    return _sha256_text(payload)
-
-
-def compute_aggregate_identity(
-    eval_rows: list[Mapping[str, Any]],
-) -> str:
-    """计算 evaluation rows 集合的有序身份 hash。
-
-    确定性派生：
-    - 按 ``utt_id`` 排序（保证顺序无关）。
-    - 每行计算 ``eval_row_identity_fingerprint``。
-    - 对 ``{n_rows, row_fingerprints}`` 做规范化 JSON 哈希。
-
-    能检测：
-    - **rows 被替换**：同一 utt_id 位置的行指纹变化 → 集合 hash 变化。
-    - **rows 遗漏**：n_rows 减少 + 指纹列表变化 → 集合 hash 变化。
-    - **混入其他运行**：来自不同 evaluator/generation 的行指纹不同 → 集合 hash 变化。
-    """
-    sorted_rows = sorted(
-        eval_rows,
-        key=lambda r: str(r.get("utt_id", "")),
-    )
-    fingerprints = [eval_row_identity_fingerprint(r) for r in sorted_rows]
-    payload = _canonical_json({
-        "n_rows": len(fingerprints),
-        "row_fingerprints": fingerprints,
-    })
-    return _sha256_text(payload)
-
-
-def verify_aggregate_identity(
-    eval_rows: list[Mapping[str, Any]],
-    expected: str,
-) -> tuple[bool, str]:
-    """验证 evaluation rows 集合是否与预期的 aggregate identity 一致。
-
-    返回 ``(match, reason)``。``match=False`` 时 ``reason`` 描述差异类型
-    （行数变化 / 行被替换 / 混入其他运行）。
-    """
-    actual = compute_aggregate_identity(eval_rows)
-    if actual == expected:
-        return True, "aggregate identity matches"
-
-    # 差异诊断
-    n_actual = len(eval_rows)
-    sorted_rows = sorted(eval_rows, key=lambda r: str(r.get("utt_id", "")))
-    actual_fps = [eval_row_identity_fingerprint(r) for r in sorted_rows]
-
-    return False, (
-        f"aggregate identity mismatch: expected={expected[:16]}… "
-        f"actual={actual[:16]}… "
-        f"(n_rows={n_actual}; "
-        "rows replaced/missing/mixed — recompute to diagnose)"
-    )
-
-
-# ============================================================
 # D. 生成 / 评测 identity 写入器（与训练 identity 协调）
 # ============================================================
 
@@ -1034,61 +950,6 @@ def write_emofilm_generation_identity(
     return identity
 
 
-def write_emofilm_evaluation_identity(
-    output_path: str | Path,
-    *,
-    code_root: str | Path,
-    command: str,
-    generation_identity_ref: str | Mapping[str, Any] | None = None,
-    eval_manifest_path: str | None = None,
-    n_eval_rows: int | None = None,
-    aggregate_identity: str | None = None,
-    evidence_tier: str | None = None,
-    evaluator_info: Mapping[str, Any] | None = None,
-    patch_bundle_path: str | Path | None = None,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """构建并原子写入 EmoFiLM 评测运行身份 JSON。
-
-    串联 A（源码身份）+ C（逐条 eval 身份 + aggregate 身份）：
-    - 捕获 source identity。
-    - 引用 generation identity（``generation_identity_ref``）。
-    - 记录 eval manifest + 行数 + aggregate identity（有序集合 hash）。
-    - 记录 evidence_tier（exact / approximate）以支持 aggregate 分离。
-
-    ``aggregate_identity`` 来自 ``compute_aggregate_identity(eval_rows)``；
-    消费方通过 ``verify_aggregate_identity`` 检测 rows 被替换/遗漏/混入。
-    """
-    source_identity = capture_source_identity(code_root, patch_bundle_path)
-
-    identity: dict[str, Any] = {
-        "schema_version": 2,
-        "run_kind": "evaluate",
-        "contract_name": "emofilm",
-        "source": source_identity,
-        "command": command,
-        "generation_identity_ref": (
-            str(generation_identity_ref)
-            if isinstance(generation_identity_ref, (str, Path))
-            else dict(generation_identity_ref)
-            if generation_identity_ref is not None
-            else None
-        ),
-        "eval_manifest_path": eval_manifest_path,
-        "n_eval_rows": n_eval_rows,
-        "aggregate_identity": aggregate_identity,
-        "evidence_tier": evidence_tier,
-        "evaluator_info": dict(evaluator_info) if evaluator_info else None,
-        "python": sys.version,
-    }
-    if extra:
-        identity["extra"] = dict(extra)
-
-    _write_atomic_json(Path(output_path), identity)
-    return identity
-
-
-# 逐条身份 / 安全恢复链的公开 API（自原 v2 identity 副本合并）。
 __all__ = [
     "SkipDecision",
     "GENERATION_SOURCE_KEYS",
@@ -1102,12 +963,8 @@ __all__ = [
     "generation_row_identity_fingerprint",
     "generation_request_fingerprint",
     "check_skip_existing",
-    "eval_row_identity_fingerprint",
-    "compute_aggregate_identity",
-    "verify_aggregate_identity",
     "write_emofilm_train_identity",
     "write_emofilm_generation_identity",
-    "write_emofilm_evaluation_identity",
 ]
 
 

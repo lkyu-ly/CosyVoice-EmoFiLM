@@ -29,9 +29,7 @@ from tools.build_emofilm_contract import (
     FINISH_REASONS,
     SCHEMA_VERSION,
     assert_no_dead_config,
-    validate_aggregate,
     validate_contract_config,
-    validate_eval_row,
     validate_generation_row,
     validate_span,
 )
@@ -560,58 +558,3 @@ def test_generation_row_accepts_zero_seed():
 # EvaluationRow + Aggregate（boundary_evidence_tier）
 # ============================================================
 
-def _valid_eval_row() -> dict[str, Any]:
-    return {
-        "utt_id": "esd_0001_ang",
-        "generation_row_ref": "gen/esd_0001_ang.json",
-        "control_span_ref": "ctrl_span/esd_0001_ang.json",
-        "evaluator": {
-            "name": "emotion2vec-v2",
-            "version": "frozen-2026-07",
-            "label_space": ["ang", "hap", "neu", "sad", "sur"],
-            "sample_rate_hz": 16000,
-        },
-        "boundary_evidence_tier": "exact",
-        "metrics": {"emo_sim": 91.2},
-    }
-
-
-def test_valid_eval_row_passes():
-    validate_eval_row(_valid_eval_row())
-
-
-def test_eval_row_rejects_invalid_boundary_tier():
-    row = _valid_eval_row()
-    row["boundary_evidence_tier"] = "wildcard"
-    with pytest.raises(ValueError, match="boundary_evidence_tier"):
-        validate_eval_row(row)
-
-
-def test_eval_row_rejects_missing_generation_ref():
-    row = _valid_eval_row()
-    del row["generation_row_ref"]
-    with pytest.raises(ValueError, match="generation_row"):
-        validate_eval_row(row)
-
-
-def test_aggregate_accepts_valid_tiers():
-    for tier in ("exact", "approximate"):
-        validate_aggregate(
-            {
-                "evidence_tier": tier,
-                "metric_contract_version": "emofilm_eval",
-                "metrics": {"emo_sim": 90.1, "wer": 0.03},
-                "n_samples": 14362,
-            }
-        )
-
-
-def test_aggregate_rejects_invalid_tier():
-    with pytest.raises(ValueError, match="evidence_tier"):
-        validate_aggregate(
-            {
-                "evidence_tier": "mixed",
-                "metrics": {"emo_sim": 90.1},
-                "n_samples": 1,
-            }
-        )

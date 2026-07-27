@@ -31,7 +31,6 @@ import pytest
 
 from tools.build_emofilm_contract import (
     FINISH_REASONS,
-    validate_eval_row,
     validate_generation_row,
 )
 from tools.write_emofilm_run_identity import (
@@ -40,12 +39,8 @@ from tools.write_emofilm_run_identity import (
     build_source_revision_or_patch,
     capture_source_identity,
     check_skip_existing,
-    compute_aggregate_identity,
-    eval_row_identity_fingerprint,
     generation_request_fingerprint,
     generation_row_identity_fingerprint,
-    verify_aggregate_identity,
-    write_emofilm_evaluation_identity,
     write_emofilm_generation_identity,
 )
 
@@ -135,32 +130,6 @@ def _make_generation_row_with_inline(
     if finish_reason == "eos":
         row["wav_path"] = wav_path
     return row
-
-
-def _make_eval_row(
-    *,
-    utt_id: str = "utt_001",
-    generation_row_ref: str = "gen_manifest.jsonl#utt_001",
-    control_span_ref: str = "control.jsonl#span_001",
-    evaluator_name: str = "emotion2vec-v2",
-    evaluator_version: str = "frozen-2026-01",
-    boundary_evidence_tier: str = "exact",
-    metrics: dict | None = None,
-) -> dict:
-    return {
-        "utt_id": utt_id,
-        "generation_row_ref": generation_row_ref,
-        "control_span_ref": control_span_ref,
-        "evaluator": {
-            "name": evaluator_name,
-            "version": evaluator_version,
-            "label_space": ["ang", "hap", "neu", "sad", "sur"],
-            "sample_rate_hz": 16000,
-            "frame_rate_hz": 50.0,
-        },
-        "boundary_evidence_tier": boundary_evidence_tier,
-        "metrics": metrics or {"emo_sim": 0.85, "arousal_diff": 0.12},
-    }
 
 
 def _make_request_fingerprint(
@@ -587,162 +556,6 @@ class TestSkipExistingEdgeCases:
 # ============================================================
 
 
-class TestEvalRowIdentity:
-    """C. eval row 绑定齐全。"""
-
-    def test_eval_fingerprint_stable(self):
-        """相同 eval row → 相同指纹。"""
-        row = _make_eval_row()
-        fp1 = eval_row_identity_fingerprint(row)
-        fp2 = eval_row_identity_fingerprint(dict(row))
-        assert fp1 == fp2
-
-    def test_eval_fingerprint_changes_on_evaluator(self):
-        """evaluator version 变化 → 不同指纹。"""
-        row = _make_eval_row()
-        fp1 = eval_row_identity_fingerprint(row)
-        modified = dict(row)
-        modified["evaluator"] = {**row["evaluator"], "version": "frozen-2026-02"}
-        fp2 = eval_row_identity_fingerprint(modified)
-        assert fp1 != fp2
-
-    def test_eval_fingerprint_changes_on_generation_ref(self):
-        """generation row 引用变化 → 不同指纹。"""
-        row = _make_eval_row()
-        fp1 = eval_row_identity_fingerprint(row)
-        modified = dict(row)
-        modified["generation_row_ref"] = "gen_manifest.jsonl#utt_002"
-        fp2 = eval_row_identity_fingerprint(modified)
-        assert fp1 != fp2
-
-    def test_eval_fingerprint_changes_on_control_span(self):
-        """控制 span 引用变化 → 不同指纹。"""
-        row = _make_eval_row()
-        fp1 = eval_row_identity_fingerprint(row)
-        modified = dict(row)
-        modified["control_span_ref"] = "control.jsonl#span_002"
-        fp2 = eval_row_identity_fingerprint(modified)
-        assert fp1 != fp2
-
-    def test_eval_fingerprint_changes_on_metrics(self):
-        """指标变化 → 不同指纹（绑定逐样本指标用于审计）。"""
-        row = _make_eval_row()
-        fp1 = eval_row_identity_fingerprint(row)
-        modified = dict(row)
-        modified["metrics"] = {"emo_sim": 0.90, "arousal_diff": 0.05}
-        fp2 = eval_row_identity_fingerprint(modified)
-        assert fp1 != fp2
-
-    def test_eval_fingerprint_changes_on_evidence_tier(self):
-        """boundary_evidence_tier 变化 → 不同指纹。"""
-        row = _make_eval_row(boundary_evidence_tier="exact")
-        fp1 = eval_row_identity_fingerprint(row)
-        modified = _make_eval_row(boundary_evidence_tier="approximate")
-        fp2 = eval_row_identity_fingerprint(modified)
-        assert fp1 != fp2
-
-
-class TestAggregateIdentity:
-    """C. aggregate identity 检测 rows 被替换/遗漏/混入。"""
-
-    def test_aggregate_stable_on_same_rows(self):
-        """相同 rows → 相同 aggregate hash（确定性）。"""
-        rows = [
-            _make_eval_row(utt_id="utt_001"),
-            _make_eval_row(utt_id="utt_002", generation_row_ref="gen.jsonl#utt_002"),
-            _make_eval_row(utt_id="utt_003", generation_row_ref="gen.jsonl#utt_003"),
-        ]
-        h1 = compute_aggregate_identity(rows)
-        h2 = compute_aggregate_identity(list(reversed(rows)))
-        assert h1 == h2  # 顺序无关（按 utt_id 排序）
-
-    def test_aggregate_detects_replaced_row(self):
-        """一行被替换（同 utt_id 不同 evaluator）→ aggregate hash 变化。"""
-        rows = [
-            _make_eval_row(utt_id="utt_001"),
-            _make_eval_row(utt_id="utt_002", generation_row_ref="gen.jsonl#utt_002"),
-        ]
-        original = compute_aggregate_identity(rows)
-
-        # 替换第二行的 evaluator version
-        replaced = [
-            _make_eval_row(utt_id="utt_001"),
-            _make_eval_row(
-                utt_id="utt_002",
-                generation_row_ref="gen.jsonl#utt_002",
-                evaluator_version="frozen-2026-02",
-            ),
-        ]
-        actual = compute_aggregate_identity(replaced)
-        match, reason = verify_aggregate_identity(replaced, original)
-        assert match is False
-        assert "mismatch" in reason
-
-    def test_aggregate_detects_missing_row(self):
-        """一行遗漏 → n_rows 变化 → aggregate hash 变化。"""
-        rows = [
-            _make_eval_row(utt_id="utt_001"),
-            _make_eval_row(utt_id="utt_002", generation_row_ref="gen.jsonl#utt_002"),
-            _make_eval_row(utt_id="utt_003", generation_row_ref="gen.jsonl#utt_003"),
-        ]
-        original = compute_aggregate_identity(rows)
-
-        missing = rows[:2]  # 去掉最后一行
-        match, reason = verify_aggregate_identity(missing, original)
-        assert match is False
-        assert "mismatch" in reason
-
-    def test_aggregate_detects_extra_row(self):
-        """多出混入的行 → n_rows 变化 → aggregate hash 变化。"""
-        rows = [
-            _make_eval_row(utt_id="utt_001"),
-            _make_eval_row(utt_id="utt_002", generation_row_ref="gen.jsonl#utt_002"),
-        ]
-        original = compute_aggregate_identity(rows)
-
-        mixed_in = rows + [_make_eval_row(utt_id="utt_003", generation_row_ref="gen.jsonl#utt_003")]
-        match, reason = verify_aggregate_identity(mixed_in, original)
-        assert match is False
-        assert "mismatch" in reason
-
-    def test_aggregate_detects_mixed_run_rows(self):
-        """混入来自不同运行的行（不同 generation_ref）→ 检测到。"""
-        rows_run_a = [
-            _make_eval_row(utt_id="utt_001", generation_row_ref="run_a.jsonl#utt_001"),
-            _make_eval_row(utt_id="utt_002", generation_row_ref="run_a.jsonl#utt_002"),
-        ]
-        original = compute_aggregate_identity(rows_run_a)
-
-        # 第二行换成 run_b 的
-        mixed = [
-            _make_eval_row(utt_id="utt_001", generation_row_ref="run_a.jsonl#utt_001"),
-            _make_eval_row(utt_id="utt_002", generation_row_ref="run_b.jsonl#utt_002"),
-        ]
-        match, reason = verify_aggregate_identity(mixed, original)
-        assert match is False
-
-    def test_aggregate_verify_match(self):
-        """相同 rows → verify 返回 True。"""
-        rows = [_make_eval_row(utt_id="utt_001"), _make_eval_row(utt_id="utt_002")]
-        agg = compute_aggregate_identity(rows)
-        match, reason = verify_aggregate_identity(rows, agg)
-        assert match is True
-        assert "matches" in reason
-
-    def test_aggregate_empty_rows(self):
-        """空 rows 列表 → 有效 hash（边界 case）。"""
-        agg = compute_aggregate_identity([])
-        assert isinstance(agg, str)
-        assert len(agg) == 64
-        match, _ = verify_aggregate_identity([], agg)
-        assert match is True
-
-
-# ============================================================
-# D. v2 identity 写入器（generation + evaluation roundtrip）
-# ============================================================
-
-
 class TestIdentityWriters:
     """D. generation/evaluation identity 写入器 roundtrip。"""
 
@@ -769,31 +582,6 @@ class TestIdentityWriters:
         assert reloaded["train_identity_ref"] == "artifacts/train_identity.json"
         assert "source" in reloaded
         assert "git_head" in reloaded["source"]
-
-    def test_evaluation_identity_roundtrip(self, tmp_path):
-        """evaluation identity JSON 写出 + 读回。"""
-        eval_rows = [_make_eval_row(utt_id="utt_001"), _make_eval_row(utt_id="utt_002")]
-        agg = compute_aggregate_identity(eval_rows)
-
-        out = tmp_path / "eval_identity.json"
-        identity = write_emofilm_evaluation_identity(
-            out,
-            code_root=ROOT,
-            command="python eval_v2.py",
-            generation_identity_ref="artifacts/gen_identity.json",
-            eval_manifest_path="manifests/eval.jsonl",
-            n_eval_rows=2,
-            aggregate_identity=agg,
-            evidence_tier="exact",
-            evaluator_info={"name": "emotion2vec-v2", "version": "frozen-2026-01"},
-        )
-        assert out.is_file()
-        reloaded = json.loads(out.read_text())
-        assert reloaded["schema_version"] == 2
-        assert reloaded["run_kind"] == "evaluate"
-        assert reloaded["aggregate_identity"] == agg
-        assert reloaded["evidence_tier"] == "exact"
-        assert reloaded["generation_identity_ref"] == "artifacts/gen_identity.json"
 
     def test_generation_identity_with_patch_bundle(self, tmp_path):
         """dirty worktree → generation identity 保存 patch bundle。"""
@@ -826,68 +614,6 @@ class TestIdentityWriters:
         )
         reloaded = json.loads(out.read_text())
         assert reloaded["train_identity_ref"] == train_ref
-
-    def test_eval_identity_references_generation_identity(self, tmp_path):
-        """eval identity 通过 generation_identity_ref 关联 generation identity。"""
-        gen_out = tmp_path / "gen_identity.json"
-        gen_identity = write_emofilm_generation_identity(
-            gen_out,
-            code_root=ROOT,
-            command="infer",
-        )
-        eval_out = tmp_path / "eval_identity.json"
-        eval_identity = write_emofilm_evaluation_identity(
-            eval_out,
-            code_root=ROOT,
-            command="eval",
-            generation_identity_ref=str(gen_out),
-        )
-        reloaded = json.loads(eval_out.read_text())
-        assert reloaded["generation_identity_ref"] == str(gen_out)
-
-    def test_generation_to_eval_chain(self, tmp_path):
-        """端到端身份链：train → generation → evaluation 引用链完整。"""
-        # 1. Generation identity
-        gen_rows = [_make_generation_row(utt_id=f"utt_{i:03d}") for i in range(3)]
-        gen_out = tmp_path / "gen_identity.json"
-        write_emofilm_generation_identity(
-            gen_out,
-            code_root=ROOT,
-            command="infer",
-            generation_manifest_path="gen.jsonl",
-            n_generation_rows=3,
-            train_identity_ref="train_identity.json",
-        )
-
-        # 2. Evaluation identity 引用 generation identity
-        eval_rows = [_make_eval_row(utt_id=f"utt_{i:03d}") for i in range(3)]
-        agg = compute_aggregate_identity(eval_rows)
-        eval_out = tmp_path / "eval_identity.json"
-        write_emofilm_evaluation_identity(
-            eval_out,
-            code_root=ROOT,
-            command="eval",
-            generation_identity_ref=str(gen_out),
-            aggregate_identity=agg,
-            n_eval_rows=3,
-        )
-
-        # 3. 验证链条可追溯
-        gen_reloaded = json.loads(gen_out.read_text())
-        eval_reloaded = json.loads(eval_out.read_text())
-        assert gen_reloaded["train_identity_ref"] == "train_identity.json"
-        assert eval_reloaded["generation_identity_ref"] == str(gen_out)
-        assert eval_reloaded["aggregate_identity"] == agg
-
-        # 4. aggregate 可以验证
-        match, _ = verify_aggregate_identity(eval_rows, agg)
-        assert match is True
-
-
-# ============================================================
-# E. v1 identity 原样保留
-# ============================================================
-
 
 class TestV1IdentityPreserved:
     """E. v1 ``write_run_identity`` 入口签名 + 行为不变。"""

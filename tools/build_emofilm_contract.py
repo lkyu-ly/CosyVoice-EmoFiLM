@@ -5,7 +5,7 @@
 
 1. **合同原语（schema_version=2，合同名 ``emofilm``）**：TypedDict schema +
    手写校验器（``validate_span`` / ``validate_generation_row`` /
-   ``validate_eval_row`` / ``validate_aggregate`` / ``validate_contract_config``）。
+   ``validate_contract_config``）。
    所有下游票据（数据生成 / 评测 / 身份）以本文件定义的 schema 与校验器为唯一来源。
    人类可读 schema 单一来源：``docs/contracts/emofilm_v2_schema.md``。
 
@@ -647,92 +647,6 @@ def validate_generation_row(row: Mapping[str, Any]) -> dict[str, Any]:
                 f"finish_reason={finish_reason!r} must not carry a formal wav_path "
                 "(only eos enters acoustics / formal WAV)"
             )
-
-    return result
-
-
-# ============================================================
-# EvaluationRow / Aggregate 校验
-# ============================================================
-
-
-def validate_eval_row(row: Mapping[str, Any]) -> dict[str, Any]:
-    """校验一条 EvaluationRow；返回 dict，失败抛 ValueError。"""
-    if not isinstance(row, Mapping):
-        raise ValueError("evaluation row must be a mapping")
-    result = dict(row)
-
-    utt_id = str(result.get("utt_id", "")).strip()
-    if not utt_id:
-        raise ValueError("EvaluationRow requires non-empty utt_id")
-    result["utt_id"] = utt_id
-
-    if not (
-        _present_str(result, "generation_row_ref")
-        or _present_mapping(result, "generation_row")
-    ):
-        raise ValueError(
-            "eval row missing generation_row reference "
-            "(generation_row_ref or generation_row)"
-        )
-
-    if not (
-        _present_str(result, "control_span_ref")
-        or _present_mapping(result, "control_span")
-    ):
-        raise ValueError(
-            "eval row missing control_span reference "
-            "(control_span_ref or control_span)"
-        )
-
-    evaluator = result.get("evaluator")
-    if not isinstance(evaluator, Mapping):
-        raise ValueError(
-            "eval row requires evaluator mapping {name, version, ...}"
-        )
-    for key in ("name", "version"):
-        value = evaluator.get(key)
-        if not _is_non_empty_str(value):
-            raise ValueError(f"evaluator.{key} must be a non-empty string")
-
-    tier = result.get("boundary_evidence_tier")
-    if tier not in BOUNDARY_EVIDENCE_TIERS:
-        raise ValueError(
-            f"boundary_evidence_tier must be one of {sorted(BOUNDARY_EVIDENCE_TIERS)}, "
-            f"got {tier!r}"
-        )
-
-    metrics = result.get("metrics")
-    if not isinstance(metrics, Mapping):
-        raise ValueError(
-            "eval row requires metrics mapping (per-sample / per-span; may be empty placeholder)"
-        )
-
-    return result
-
-
-def validate_aggregate(row: Mapping[str, Any]) -> dict[str, Any]:
-    """校验一条 Aggregate；返回 dict，失败抛 ValueError。"""
-    if not isinstance(row, Mapping):
-        raise ValueError("aggregate must be a mapping")
-    result = dict(row)
-
-    tier = result.get("evidence_tier")
-    if tier not in BOUNDARY_EVIDENCE_TIERS:
-        raise ValueError(
-            f"aggregate evidence_tier must be one of {sorted(BOUNDARY_EVIDENCE_TIERS)}, "
-            f"got {tier!r}"
-        )
-
-    metrics = result.get("metrics")
-    if not isinstance(metrics, Mapping):
-        raise ValueError("aggregate requires metrics mapping")
-
-    n_samples = result.get("n_samples")
-    if not isinstance(n_samples, int) or isinstance(n_samples, bool) or n_samples < 0:
-        raise ValueError(
-            f"aggregate n_samples must be a non-negative int, got {n_samples!r}"
-        )
 
     return result
 
