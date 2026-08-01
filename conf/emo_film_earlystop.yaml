@@ -1,0 +1,313 @@
+# === 收敛实验配置（派生自 emo_film.yaml，2026-08-01）===
+# 唯一差异：train_conf.max_epoch 5→30（早停上限）+ early_stop_* 字段（CV 早停 +
+# 容忍度）。其余与 canonical emo_film.yaml 逐字节一致（disabled / 同 optimizer
+# 三组 LR / 同数据合同 emofilm_v1）。用于"训一版更收敛的 FiLM-only 模型"对比
+# exp/emofilm_film_only/（5 epoch）。early_stop 逻辑见
+# cosyvoice/bin/train_emo.py + train_utils_emo.EarlyStopTracker。
+# 基线 5-epoch 配置以 canonical emo_film.yaml（early_stop 缺省）为准，勿动。
+
+# Emo-FiLM 配置: target-only 单流协议（活跃主线权威，ADR-0020 扁平化）。
+#
+# 本配置是 EmoFiLM 的单一活跃配置权威。基于 CosyVoice2 派生，替换
+# llm/tokenizer/data_pipeline/train_conf。关键点：
+#   - llm: ``Qwen2LM_Emotion``（无输入端 emotion_classifier；不接受 mix_ratio /
+#     emo_loss_weight / alpha）。FiLM (emotion_encoder + emotion_adapter) 保留，
+#     另有下游 emotion/arousal 监督任务头。
+#   - 删除死配置字段：mix_ratio（双流）、emo_loss_weight（输入端 classifier CE）、
+#     顶层 alpha（配置占位；采样超参归属逐生成 decode_config）。
+#     → tools/build_emofilm_contract.py :: assert_no_dead_config 必须通过。
+#   - 训练协议恒定单流：SOS + FiLM(target text) + task + teacher-forced target
+#     speech；推理前缀 = SOS + FiLM(target text) + task。
+#   - prompt_text / prompt_speech_token / prompt_emotion / prompt_intensity 不进
+#     LLM 条件；speaker / Flow / HiFT prompt 条件（flow_prompt_speech_token /
+#     prompt_speech_feat / flow_embedding）保持透传。
+#   - 长度 / finish_reason 合同已落地：
+#     decode_config（默认值）：min_len = int(text_len*min_token_text_ratio)，
+#     max_len = min(int(text_len*max_token_text_ratio), max_len_hard_cap)；
+#     解码前 max_len > min_len 否则结构化 input_rejected（不进采样）。
+#     finish_reason ∈ {eos, max_len_reached, invalid_token_retry_exhausted,
+#     sampler_error, input_rejected}；仅 eos 进 Flow/HiFT + 正式 WAV。
+#     逐生成 decode_config 可覆盖这些默认（schema §2 GenerationRow.decode_config）。
+
+# decode 默认配置（长度合同）。逐生成 decode_config 可覆盖；
+# GenerationRow.decode_config 必须记录实际使用的 min/max_token_text_ratio +
+# max_len_hard_cap（schema §2，tools/build_emofilm_contract.validate_generation_row）。
+decode_config:
+    min_token_text_ratio: 2
+    max_token_text_ratio: 20
+    max_len_hard_cap: 2000   # ~80s @ 25Hz token_frame_rate；bounded 防失控（修复历史 max_len=200 bug）
+
+# set random seed, so that you may reproduce your result.
+__set_seed1: !apply:random.seed [1986]
+__set_seed2: !apply:numpy.random.seed [1986]
+__set_seed3: !apply:torch.manual_seed [1986]
+__set_seed4: !apply:torch.cuda.manual_seed_all [1986]
+
+# fixed params
+sample_rate: 24000
+llm_input_size: 896
+llm_output_size: 896
+spk_embed_dim: 192
+qwen_pretrain_path: ''
+token_frame_rate: 25
+token_mel_ratio: 2
+
+# stream related params
+chunk_size: 25
+num_decoding_left_chunks: -1
+
+# model params
+llm: !new:cosyvoice.llm.llm_emotion.Qwen2LM_Emotion
+    llm_input_size: !ref <llm_input_size>
+    llm_output_size: !ref <llm_output_size>
+    speech_token_size: 6561
+    emotion_vocab_size: 6  # 5 emotions + 1 padding（tokenizer id 空间）
+    intensity_vocab_size: 4  # 3 intensities + 1 padding
+    length_normalized_loss: True
+    lsm_weight: 0
+    llm: !new:cosyvoice.llm.llm.Qwen2Encoder
+        pretrain_path: !ref <qwen_pretrain_path>
+    sampling: !name:cosyvoice.utils.common.ras_sampling
+        top_p: 0.8
+        top_k: 25
+        win_size: 10
+        tau_r: 0.1
+    # 下游监督任务头 loss 权重（语义不同于输入端 emo_loss_weight：此处是生成
+    # 因果链下游 speech-token hidden 上 emotion/arousal 头的权重）。默认 1.0 / 1.0
+    # 为中立起始值，**非审计最优**；正式实验由 optimizer 分组 + 调参决定。
+    emotion_head_weight: 1.0
+    intensity_head_weight: 1.0
+    # 下游监督开关（B1 静默→显式，ticket 02）。本次实验 = FiLM-only（不接 span
+    # 监督头），故 disabled：无 span batch 只算 loss_tts 且不静默——配置与运行
+    # 行为一致。若未来接通 span 数据链，改 enabled（无 span 将显式报错）。
+    downstream_supervision: disabled
+# 不传 mix_ratio / emo_loss_weight / alpha（死字段，assert_no_dead_config 拒绝）。
+# base 仍指 CosyVoice2 llm.pt（Qwen2Encoder + llm.pt checkpoint）。
+
+flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
+    input_size: 512
+    output_size: 80
+    spk_embed_dim: !ref <spk_embed_dim>
+    output_type: 'mel'
+    vocab_size: 6561
+    input_frame_rate: !ref <token_frame_rate>
+    only_mask_loss: True
+    token_mel_ratio: !ref <token_mel_ratio>
+    pre_lookahead_len: 3
+    encoder: !new:cosyvoice.transformer.upsample_encoder.UpsampleConformerEncoder
+        output_size: 512
+        attention_heads: 8
+        linear_units: 2048
+        num_blocks: 6
+        dropout_rate: 0.1
+        positional_dropout_rate: 0.1
+        attention_dropout_rate: 0.1
+        normalize_before: True
+        input_layer: 'linear'
+        pos_enc_layer_type: 'rel_pos_espnet'
+        selfattention_layer_type: 'rel_selfattn'
+        input_size: 512
+        use_cnn_module: False
+        macaron_style: False
+        static_chunk_size: !ref <chunk_size>
+    decoder: !new:cosyvoice.flow.flow_matching.CausalConditionalCFM
+        in_channels: 240
+        n_spks: 1
+        spk_emb_dim: 80
+        cfm_params: !new:omegaconf.DictConfig
+            content:
+                sigma_min: 1e-06
+                solver: 'euler'
+                t_scheduler: 'cosine'
+                training_cfg_rate: 0.2
+                inference_cfg_rate: 0.7
+                reg_loss_type: 'l1'
+        estimator: !new:cosyvoice.flow.decoder.CausalConditionalDecoder
+            in_channels: 320
+            out_channels: 80
+            channels: [256]
+            dropout: 0.0
+            attention_head_dim: 64
+            n_blocks: 4
+            num_mid_blocks: 12
+            num_heads: 8
+            act_fn: 'gelu'
+            static_chunk_size: !ref <chunk_size> * <token_mel_ratio>
+            num_decoding_left_chunks: !ref <num_decoding_left_chunks>
+
+hift: !new:cosyvoice.hifigan.generator.HiFTGenerator
+    in_channels: 80
+    base_channels: 512
+    nb_harmonics: 8
+    sampling_rate: !ref <sample_rate>
+    nsf_alpha: 0.1
+    nsf_sigma: 0.003
+    nsf_voiced_threshold: 10
+    upsample_rates: [8, 5, 3]
+    upsample_kernel_sizes: [16, 11, 7]
+    istft_params:
+        n_fft: 16
+        hop_len: 4
+    resblock_kernel_sizes: [3, 7, 11]
+    resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+    source_resblock_kernel_sizes: [7, 7, 11]
+    source_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+    lrelu_slope: 0.1
+    audio_limit: 0.99
+    f0_predictor: !new:cosyvoice.hifigan.f0_predictor.ConvRNNF0Predictor
+        num_class: 1
+        in_channels: 80
+        cond_channels: 512
+
+# gan related module
+mel_spec_transform1: !name:matcha.utils.audio.mel_spectrogram
+    n_fft: 1920
+    num_mels: 80
+    sampling_rate: !ref <sample_rate>
+    hop_size: 480
+    win_size: 1920
+    fmin: 0
+    fmax: null
+    center: False
+hifigan: !new:cosyvoice.hifigan.hifigan.HiFiGan
+    generator: !ref <hift>
+    discriminator: !new:cosyvoice.hifigan.discriminator.MultipleDiscriminator
+        mpd: !new:matcha.hifigan.models.MultiPeriodDiscriminator
+        mrd: !new:cosyvoice.hifigan.discriminator.MultiResSpecDiscriminator
+    mel_spec_transform: [
+        !ref <mel_spec_transform1>
+    ]
+
+# processor functions（tokenize_emo 产出 text_token / emotion_ids /
+# intensity_ids 三元组；单流协议不消费 prompt emotion/intensity）
+parquet_opener: !name:cosyvoice.dataset.processor.parquet_opener
+get_tokenizer: !name:cosyvoice.tokenizer.emo_tokenizer.get_emo_tokenizer
+    token_path: !ref <qwen_pretrain_path>
+    skip_special_tokens: True
+allowed_special: 'all'
+tokenize_emo: !name:cosyvoice.dataset.processor.tokenize_emo
+    get_tokenizer: !ref <get_tokenizer>
+    allowed_special: !ref <allowed_special>
+filter: !name:cosyvoice.dataset.processor.filter
+    max_length: 40960
+    min_length: 1
+    token_max_length: 9999
+    token_min_length: 1
+resample: !name:cosyvoice.dataset.processor.resample
+    resample_rate: !ref <sample_rate>
+truncate: !name:cosyvoice.dataset.processor.truncate
+    truncate_length: 24480
+feat_extractor: !name:matcha.utils.audio.mel_spectrogram
+    n_fft: 1920
+    num_mels: 80
+    sampling_rate: !ref <sample_rate>
+    hop_size: 480
+    win_size: 1920
+    fmin: 0
+    fmax: 8000
+    center: False
+compute_fbank: !name:cosyvoice.dataset.processor.compute_fbank
+    feat_extractor: !ref <feat_extractor>
+    token_mel_ratio: !ref <token_mel_ratio>
+compute_f0: !name:cosyvoice.dataset.processor.compute_f0
+    sample_rate: !ref <sample_rate>
+    hop_size: 480
+parse_embedding: !name:cosyvoice.dataset.processor.parse_embedding
+    normalize: True
+shuffle: !name:cosyvoice.dataset.processor.shuffle
+    shuffle_size: 1000
+sort: !name:cosyvoice.dataset.processor.sort
+    sort_size: 500
+batch: !name:cosyvoice.dataset.processor.batch
+    batch_type: 'static'
+    batch_size: 4
+padding: !name:cosyvoice.dataset.processor.padding
+    use_spk_embedding: False
+
+
+# dataset processor pipeline（tokenize_emo 产出 emotion_ids / intensity_ids）
+data_pipeline: [
+    !ref <parquet_opener>,
+    !ref <tokenize_emo>,
+    !ref <filter>,
+    !ref <resample>,
+    !ref <compute_fbank>,
+    !ref <parse_embedding>,
+    !ref <shuffle>,
+    !ref <sort>,
+    !ref <batch>,
+    !ref <padding>,
+]
+data_pipeline_gan: [
+    !ref <parquet_opener>,
+    !ref <tokenize_emo>,
+    !ref <filter>,
+    !ref <resample>,
+    !ref <truncate>,
+    !ref <compute_fbank>,
+    !ref <compute_f0>,
+    !ref <parse_embedding>,
+    !ref <shuffle>,
+    !ref <sort>,
+    !ref <batch>,
+    !ref <padding>,
+]
+
+# llm flow train conf
+# optimizer 分组 + scheduler 合同：
+#   - 三稳定命名组：random_new_condition（FiLM: emotion_encoder/emotion_adapter）/
+#     downstream_heads（emotion_head/arousal_head）/ pretrained_decoder（llm_decoder）。
+#     每组独立 LR + weight_decay，组间参数 id 无交集、完整覆盖 trainable、冻结参数
+#     （llm backbone / speech_embedding / llm_embedding）不进任何组。
+#   - scheduler 单一工厂：warmup 实际改变前期 LR；constant 不接受残留 warmup_steps；
+#     未知字段启动失败（``validate_optim_scheduler_conf``）。
+#   - **默认 LR / weight_decay 为工程占位默认，非静态审计最优**。
+#     正式实验由调参实验决定；此处仅保证分组结构与 scheduler 合同可审计。
+train_conf:
+    optim: adam
+    optim_conf:   # 顶层 lr 已移除（死字段，票据 06）；训练只读 groups[role].lr
+        groups:
+            # FiLM 随机新增条件模块（随机初始化；较高 LR 快速收敛）
+            random_new_condition:
+                lr: 1.0e-4
+                weight_decay: 0.0
+            # 下游监督任务头（随机初始化；与 FiLM 同 LR 起步）
+            downstream_heads:
+                lr: 1.0e-4
+                weight_decay: 0.0
+            # 预训练 speech-token decoder（base llm.pt 含；低 LR 续训防灾难遗忘）
+            pretrained_decoder:
+                lr: 1.0e-5
+                weight_decay: 0.0
+    scheduler: warmup
+    scheduler_conf:
+        warmup_steps: 250   # 工程占位；非 audit 最优
+    max_epoch: 30   # 收敛实验上限（早停会在 plateau 后提前停，见 early_stop_*）
+    grad_clip: 5
+    accum_grad: 2
+    log_interval: 100
+    save_per_step: -1
+    # CV 早停 + 容忍度（train_utils_emo.EarlyStopTracker）。监控 cv loss_tts：
+    # 连续 patience 个 epoch 无突破 min_delta 的改善、且已训满 min_epoch → 停。
+    # 收口 restore-best（train_emo.py）使 final.pt = 收敛最优点。
+    early_stop: true
+    early_stop_metric: loss_tts
+    early_stop_min_delta: 0.001   # 容忍度：CV 改善 < best−0.001 才算突破
+    early_stop_patience: 5        # 连续 5 epoch 无突破改善 → 停
+    early_stop_min_epoch: 5       # 至少训满 5 epoch（对齐基线 floor）才允许早停
+
+# gan train conf
+train_conf_gan:
+    optim: adam
+    optim_conf:
+        lr: 0.0002
+    scheduler: constantlr
+    optim_d: adam
+    optim_conf_d:
+        lr: 0.0002
+    scheduler_d: constantlr
+    max_epoch: 200
+    grad_clip: 5
+    accum_grad: 1
+    log_interval: 100
+    save_per_step: -1

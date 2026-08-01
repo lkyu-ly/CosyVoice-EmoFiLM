@@ -5,6 +5,7 @@ import argparse
 import datetime
 import logging
 import os
+import shutil
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -30,6 +31,7 @@ from cosyvoice.utils.train_utils import (
     wrap_cuda_model,
 )
 from cosyvoice.utils.train_utils_emo import (
+    build_early_stop_tracker,
     build_scheduler,
     finalize_latest_checkpoint,
     freeze,
@@ -340,6 +342,28 @@ def main():
     executor = Executor(gan=False)
     executor.step = start_step
     scaler = torch.cuda.amp.GradScaler() if args.use_amp else None
+
+    # CV 早停 + 容忍度（early_stop 缺省/false → tracker=None → 与基线完全一致：
+    # 不产生 best.pt、不 restore-best，循环跑到 max_epoch 后收口末 epoch）。
+    early_stop = build_early_stop_tracker(info_dict)
+    best_ckpt_path = os.path.join(args.model_dir, "best.pt")
+    if early_stop is not None:
+        logging.info(
+            "[early-stop] enabled: metric=%s min_delta=%g patience=%d min_epoch=%d",
+            early_stop.metric, early_stop.min_delta,
+            early_stop.patience, early_stop.min_epoch,
+        )
+        if start_epoch > -1:
+            # resume（--checkpoint 指向训练产物 latest.pt）+ 早停组合：tracker 从 inf
+            # 重建，resume 前的全局 best 历史丢失，restore-best 只覆盖 resume 之后的最优。
+            # 本实验 fresh-start（base llm.pt, start_epoch=-1）不触发；留 warning 防误用。
+            logging.warning(
+                "[early-stop] resume detected (start_epoch=%d): tracker rebuilt from "
+                "inf, best history lost — restore-best only covers post-resume best; "
+                "prefer fresh-start when using early stopping.",
+                start_epoch,
+            )
+
     for epoch in range(start_epoch + 1, info_dict["max_epoch"]):
         executor.epoch = epoch
         train_dataset.set_epoch(epoch)
@@ -351,7 +375,58 @@ def main():
         )
         dist.destroy_process_group(group_join)
 
+        # 早停判定：train_one_epoc 末尾 cv() 已把该 epoch 的 CV 均值 loss 写入
+        # info_dict['loss_dict']（float）。
+        # 【前置条件】break 决策要求各 rank 的 cv_value 一致——本实验 nproc=1 单 rank
+        # 天然满足。多 GPU（world_size>1）下 cv() 逐 rank 前向非逐位同步，可能使
+        # should_stop 跨 rank 分歧 → DDP hang；启用多 GPU 早停前须先 broadcast cv_value
+        # 或 all_reduce 归一（本实验不涉及，故未实现该路径）。
+        if early_stop is not None:
+            cv_value = float(info_dict["loss_dict"][early_stop.metric])
+            improved, should_stop = early_stop.update(epoch, cv_value)
+            logging.info(
+                "[early-stop] epoch %d cv_%s=%.6f best=%.6f@epoch%d bad=%d/%d%s",
+                epoch, early_stop.metric, cv_value,
+                early_stop.best_value, early_stop.best_epoch,
+                early_stop.bad_epochs, early_stop.patience,
+                " IMPROVED" if improved else "",
+            )
+            # 改善则固化 best.pt = 刚由 cv() 写入的 latest.pt（rank 0 独占写盘）
+            if improved and rank == 0:
+                latest_pt = os.path.join(args.model_dir, "latest.pt")
+                if os.path.isfile(latest_pt):
+                    shutil.copy2(latest_pt, best_ckpt_path)
+            if should_stop:
+                logging.info(
+                    "[early-stop] patience exhausted at epoch %d — stopping early "
+                    "(best cv_%s=%.6f at epoch %d)",
+                    epoch, early_stop.metric,
+                    early_stop.best_value, early_stop.best_epoch,
+                )
+                break
+
     rank = dist.get_rank() if dist.is_initialized() else int(os.environ.get("RANK", 0))
+    # 收敛收口：若有 best.pt，恢复 best 权重使 final.pt = 收敛最优点（而非触发
+    # 停止的末 epoch，避免在过拟合曲线上收口）。best.pt → latest.pt 后由
+    # finalize_latest_checkpoint 收口为 final.pt；同时把 best 载入内存模型，使
+    # train_identity.final_parameter_hash 反映 best 权重（与 final.pt 同源权重——
+    # 注意 final_parameter_hash 是结构哈希、final_checkpoint.sha256 是文件字节哈希，
+    # 是 identity 的两个不同字段、算法不同、本就不相等，无消费方比较二者）。
+    if early_stop is not None and os.path.isfile(best_ckpt_path):
+        if rank == 0:
+            shutil.copy2(best_ckpt_path, os.path.join(args.model_dir, "latest.pt"))
+            _state, _model_state, _ = _load_checkpoint_payload(best_ckpt_path)
+            load_trained_state(
+                model.module if hasattr(model, "module") else model,
+                _model_state,
+            )
+            logging.info(
+                "[early-stop] restored best.pt (epoch %d, cv_%.6f) → final",
+                early_stop.best_epoch, early_stop.best_value,
+            )
+        if dist.is_available() and dist.is_initialized():
+            dist.barrier()
+
     finalize_checkpoint_on_rank_zero(args.model_dir, rank=rank, model=model)
 
 

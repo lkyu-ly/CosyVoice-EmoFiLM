@@ -393,6 +393,84 @@ def build_scheduler(optimizer, conf: Mapping[str, Any]):
 
 
 # ============================================================
+# CV 早停 + 容忍度（纯状态跟踪，无 IO）
+# ============================================================
+
+
+class EarlyStopTracker:
+    """CV 指标早停 + 容忍度跟踪器（纯状态，无 IO）。
+
+    每个 epoch 末用 CV 指标调用 :meth:`update`；当连续 ``patience`` 个 epoch
+    无改善（改善 = ``cv_value < best_value - min_delta``）且已达 ``min_epoch``，
+    判定应停止。``min_delta`` 是"容忍度"——小于该量的波动不算改善，避免在
+    噪声平台上反复刷新 best 而无法触发早停。
+
+    所有 rank 必须以**相同的 cv_value** 调用（单 GPU 训练或确定性 CV），保证
+    break 决策跨 rank 一致（否则 DDP 会 hang）。``executor.cv`` 在每个 rank 上
+    都对同一 CV 集前向计算 loss，单 GPU 下天然一致。
+    """
+
+    def __init__(self, metric: str = "loss_tts", min_delta: float = 0.0,
+                 patience: int = 0, min_epoch: int = 0):
+        self.metric = str(metric)
+        self.min_delta = float(min_delta)
+        self.patience = int(patience)
+        self.min_epoch = int(min_epoch)
+        self.best_value = float("inf")
+        self.best_epoch = -1
+        self.bad_epochs = 0
+
+    def update(self, epoch: int, cv_value: float) -> tuple[bool, bool]:
+        """记录该 epoch 的 CV 指标。
+
+        Returns:
+            (improved, should_stop): improved 表示相对 best 有突破容忍度的改善；
+            should_stop 表示已连续 patience 个 epoch 无改善且达到 min_epoch。
+        """
+        value = float(cv_value)
+        improved = value < self.best_value - self.min_delta
+        if improved:
+            self.best_value = value
+            self.best_epoch = int(epoch)
+            self.bad_epochs = 0
+        else:
+            self.bad_epochs += 1
+        # min_epoch 语义=「至少训满多少 epoch」：epoch 为 0-indexed（已训 epoch+1
+        # 个），故 epoch+1 >= min_epoch 才允许停（min_epoch=5 ⇒ 训满 0..4 共 5 个后）。
+        should_stop = (
+            int(epoch) + 1 >= self.min_epoch and self.bad_epochs >= self.patience
+        )
+        return improved, should_stop
+
+
+def build_early_stop_tracker(conf: Mapping[str, Any]):
+    """从 train_conf 构建 EarlyStopTracker；未启用时返回 None。
+
+    返回 None 时调用方应走原生循环（与无早停基线**完全一致**：不产生 best.pt、
+    不 restore-best），保证 canonical 5-epoch 基线行为零回归。
+
+    Args:
+        conf: ``train_conf`` 映射。识别字段（均可缺省）::
+
+            early_stop: true | false        # 开关；缺省/false → 返回 None
+            early_stop_metric: loss_tts     # 监控的 CV loss 键
+            early_stop_min_delta: 0.001     # 容忍度
+            early_stop_patience: 5          # 无改善耐心（epoch 数）
+            early_stop_min_epoch: 5         # 至少训满多少 epoch 才允许早停
+    """
+    if not conf.get("early_stop"):
+        return None
+    return EarlyStopTracker(
+        metric=conf.get("early_stop_metric", "loss_tts"),
+        min_delta=conf.get("early_stop_min_delta", 0.0),
+        # 缺省非零：避免「只写 early_stop: true 漏配耐心」时 patience/min_epoch=0
+        # 导致首 epoch 即触发 should_stop（bad=0>=0）只训 1 个 epoch。
+        patience=conf.get("early_stop_patience", 5),
+        min_epoch=conf.get("early_stop_min_epoch", 1),
+    )
+
+
+# ============================================================
 # optimizer / scheduler 身份摘要（绑定到训练 identity）
 # ============================================================
 
@@ -489,6 +567,8 @@ __all__ = [
     "validate_optim_scheduler_conf",
     "init_optimizer_emo",
     "build_scheduler",
+    "build_early_stop_tracker",
+    "EarlyStopTracker",
     "summarize_optimizer_identity",
     "save_latest_checkpoint",
     "finalize_latest_checkpoint",
