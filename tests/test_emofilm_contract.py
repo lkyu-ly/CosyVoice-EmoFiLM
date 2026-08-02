@@ -8,7 +8,7 @@
 - SupervisionSpan / GenerationRow / EvaluationRow / Aggregate 合法构造通过；
 - 合同级校验器拒绝：未知 contract_name / schema_version、缺失身份引用
   （generation row 缺 source/checkpoint/control/prompt 之一）、无效
-  boundary_evidence_tier、死配置字段（mix_ratio / emo_loss_weight / alpha）；
+  boundary_evidence_tier、死配置字段（mix_ratio / alpha）；
 - ESD fixed-medium span 的 intensity_mask 必须为 False（ESD 不伪造强度）；
 - 未校准 raw_score 不得标 calibrated=True，未校准不得命名 confidence。
 
@@ -69,7 +69,7 @@ def test_contract_constants():
         "input_rejected",
     }
     assert set(BOUNDARY_EVIDENCE_TIERS) == {"exact", "approximate"}
-    assert set(DEAD_CONFIG_KEYS) == {"mix_ratio", "emo_loss_weight", "alpha"}
+    assert set(DEAD_CONFIG_KEYS) == {"mix_ratio", "alpha"}
 
 
 def test_contract_module_has_active_identity_not_v1_or_v2():

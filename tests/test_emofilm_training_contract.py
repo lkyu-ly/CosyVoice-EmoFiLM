@@ -100,16 +100,6 @@ def _make_batch(batch_size=1, text_len=3, speech_len=6, speech_token_size=16):
     }
 
 
-def test_no_input_classifier_but_downstream_heads_exist():
-    """活跃 v2 拓扑：无输入端 emotion_classifier；有下游 emotion_head/arousal_head。"""
-    model = _make_model()
-    assert not hasattr(model, "emotion_classifier"), (
-        "输入端 emotion_classifier 反模式必须从活跃模型删除"
-    )
-    assert hasattr(model, "emotion_head")
-    assert hasattr(model, "arousal_head")
-
-
 def test_effective_model_topology_and_shapes_match_emofilm_contract():
     model = _make_model(model_dim=896, speech_token_size=6561)
 

@@ -2,10 +2,14 @@
 
 本模块是 Emo-FiLM 的单一活跃 checkpoint 加载器（ADR-0020 扁平化）。允许缺失的
 前缀与活跃 ``Qwen2LM_Emotion`` 拓扑一致：FiLM（``emotion_encoder`` /
-``emotion_adapter``）+ 下游监督任务头（``emotion_head`` / ``arousal_head``）
-允许在 base CosyVoice2 ``llm.pt`` 上缺失（这些是随机初始化、base ckpt 不含的
-新增模块）。历史 v1 的 ``emotion_classifier.`` 前缀已随输入端 classifier 一并
-从活跃代码删除（反模式；仅存于 git 基线锚点 ``9c6d84b``）。
+``emotion_adapter``）+ 下游监督任务头（``emotion_head`` / ``arousal_head``）+
+input-end 句级监督探针（``emotion_classifier``）均为随机新增模块，base
+CosyVoice2 ``llm.pt`` 不含，允许在 base 加载时缺失。
+
+``emotion_classifier`` 是训练期专用模块（恒构造、冻结、推理不调用）：trained
+加载时同样允许其缺失（旧 disabled 基线 ckpt 不含该键，随机初始化即可）；但
+``emotion_head`` / ``arousal_head`` 在 trained 加载时**不允许**缺失（v1 旧制品
+防冒充守卫，ADR-0019/0020）。
 """
 import hashlib
 from typing import Mapping
@@ -14,13 +18,23 @@ import torch
 
 
 #: base checkpoint 加载时允许缺失的顶层模块前缀（活跃 ``Qwen2LM_Emotion`` 拓扑）。
-#: FiLM + 下游 emotion/arousal 任务头允许缺失；backbone / decoder / embedding
-#: 缺失或任何多余键 → 失败。
+#: FiLM + 下游 emotion/arousal 任务头 + input-end 探针允许缺失；backbone /
+#: decoder / embedding 缺失或任何多余键 → 失败。
 ALLOWED_MISSING_PREFIXES = (
     "emotion_encoder.",
     "emotion_adapter.",
     "emotion_head.",
     "arousal_head.",
+    "emotion_classifier.",
+)
+
+#: trained checkpoint 加载时允许缺失的顶层模块前缀（模型有、旧 ckpt 无）。
+#: ``emotion_classifier.`` 为 input-end 句级监督探针（恒构造、冻结、推理不调用）；
+#: 旧 disabled 基线 ckpt 不包含它，加载时随机初始化即可（冻结随机权重对推理零
+#: 影响）。刻意不含 ``emotion_head.`` / ``arousal_head.`` —— v1 旧制品缺任务头
+#: 必须在 trained 加载时失败（防冒充当前训练产物）。
+TRAINED_ALLOWED_MISSING_PREFIXES = (
+    "emotion_classifier.",
 )
 
 
@@ -44,7 +58,13 @@ def _raise_mismatch(kind, missing, unexpected):
 
 
 def load_base_state(model, state: Mapping[str, torch.Tensor]):
-    """加载基础 checkpoint，只允许活跃情感/任务头模块缺失。"""
+    """加载基础 checkpoint，只允许新增情感模块缺失、不允许任何多余键。
+
+    - missing（模型有、ckpt 无）：仅允许 ``ALLOWED_MISSING_PREFIXES`` 前缀
+      （FiLM / 下游任务头 / input-end 探针，base ``llm.pt`` 不含的新增模块）。
+    - 其余 missing 或**任何** unexpected → schema mismatch 失败（base 必须是
+      CosyVoice2 ``llm.pt``，不应携带超出模型拓扑的键）。
+    """
     expected = set(model.state_dict().keys())
     actual = _state_keys(state)
     missing = expected - actual
@@ -55,21 +75,27 @@ def load_base_state(model, state: Mapping[str, torch.Tensor]):
     }
     if disallowed_missing or unexpected:
         _raise_mismatch("base", disallowed_missing, unexpected)
-    result = model.load_state_dict(dict(state), strict=False)
-    if result.unexpected_keys:
-        _raise_mismatch("base", set(), set(result.unexpected_keys))
-    return result
+    return model.load_state_dict(dict(state), strict=False)
 
 
 def load_trained_state(model, state: Mapping[str, torch.Tensor]):
-    """严格加载训练后 checkpoint，缺失和多余键均失败。"""
+    """严格加载训练后 checkpoint；仅容忍训练期专用模块缺失。
+
+    - missing：仅允许 ``TRAINED_ALLOWED_MISSING_PREFIXES``
+      （``emotion_classifier.``，旧 disabled ckpt 不含的冻结探针）。
+    - unexpected：任何多余键失败。
+    """
     expected = set(model.state_dict().keys())
     actual = _state_keys(state)
     missing = expected - actual
     unexpected = actual - expected
-    if missing or unexpected:
-        _raise_mismatch("trained", missing, unexpected)
-    return model.load_state_dict(dict(state), strict=True)
+    disallowed_missing = {
+        key for key in missing
+        if not key.startswith(TRAINED_ALLOWED_MISSING_PREFIXES)
+    }
+    if disallowed_missing or unexpected:
+        _raise_mismatch("trained", disallowed_missing, unexpected)
+    return model.load_state_dict(dict(state), strict=False)
 
 
 def hash_model_state(model) -> str:

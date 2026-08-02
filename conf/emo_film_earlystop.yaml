@@ -10,11 +10,11 @@
 #
 # 本配置是 EmoFiLM 的单一活跃配置权威。基于 CosyVoice2 派生，替换
 # llm/tokenizer/data_pipeline/train_conf。关键点：
-#   - llm: ``Qwen2LM_Emotion``（无输入端 emotion_classifier；不接受 mix_ratio /
-#     emo_loss_weight / alpha）。FiLM (emotion_encoder + emotion_adapter) 保留，
-#     另有下游 emotion/arousal 监督任务头。
-#   - 删除死配置字段：mix_ratio（双流）、emo_loss_weight（输入端 classifier CE）、
-#     顶层 alpha（配置占位；采样超参归属逐生成 decode_config）。
+#   - llm: ``Qwen2LM_Emotion``。FiLM (emotion_encoder + emotion_adapter) +
+#     下游 emotion/arousal 监督任务头 + input-end 句级监督探针 emotion_classifier
+#     （恒构造、冻结；emo_loss_weight>0 才计入 loss，本基线配置默认 0=关闭）。
+#   - 死配置字段仅剩：mix_ratio（双流）、顶层 alpha（配置占位；采样超参归属逐生成
+#     decode_config）。emo_loss_weight 是可选 input-end 句级监督权重，非死字段。
 #     → tools/build_emofilm_contract.py :: assert_no_dead_config 必须通过。
 #   - 训练协议恒定单流：SOS + FiLM(target text) + task + teacher-forced target
 #     speech；推理前缀 = SOS + FiLM(target text) + task。
@@ -81,7 +81,8 @@ llm: !new:cosyvoice.llm.llm_emotion.Qwen2LM_Emotion
     # 监督头），故 disabled：无 span batch 只算 loss_tts 且不静默——配置与运行
     # 行为一致。若未来接通 span 数据链，改 enabled（无 span 将显式报错）。
     downstream_supervision: disabled
-# 不传 mix_ratio / emo_loss_weight / alpha（死字段，assert_no_dead_config 拒绝）。
+# 不传 mix_ratio / alpha（死字段，assert_no_dead_config 拒绝）；emo_loss_weight
+# 默认 0=关闭（可选 input-end 句级监督）。
 # base 仍指 CosyVoice2 llm.pt（Qwen2Encoder + llm.pt checkpoint）。
 
 flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
@@ -294,7 +295,7 @@ train_conf:
     early_stop_metric: loss_tts
     early_stop_min_delta: 0.001   # 容忍度：CV 改善 < best−0.001 才算突破
     early_stop_patience: 5        # 连续 5 epoch 无突破改善 → 停
-    early_stop_min_epoch: 5       # 至少训满 5 epoch（对齐基线 floor）才允许早停
+    early_stop_min_epoch: 3       # 至少训满 3 epoch（对齐基线 floor）才允许早停
 
 # gan train conf
 train_conf_gan:

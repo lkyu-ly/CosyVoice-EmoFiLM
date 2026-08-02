@@ -20,6 +20,7 @@
 **默认值声明**：本模块与 ``conf/emo_film.yaml`` 中的 LR / weight_decay 默认值均为
 **工程占位默认**，**非静态审计最优**。正式实验需由调参实验确定。
 """
+
 from __future__ import annotations
 
 import logging
@@ -30,7 +31,6 @@ import torch
 import torch.optim as optim
 
 from cosyvoice.utils.scheduler import ConstantLR, WarmupLR
-
 
 # ============================================================
 # 三稳定命名参数组（角色 → 模块属性前缀）
@@ -121,7 +121,9 @@ def freeze(model) -> int:
     pct = 100 * n_trainable / n_total if n_total > 0 else 0.0
     logging.info(
         "[freeze] trainable params: %d / %d (%.4f%%)",
-        n_trainable, n_total, pct,
+        n_trainable,
+        n_total,
+        pct,
     )
     trainable_names = [n for n, p in bare.named_parameters() if p.requires_grad]
     logging.info("[freeze] trainable parameter names (%d):", len(trainable_names))
@@ -204,9 +206,7 @@ def validate_optim_scheduler_conf(conf: Mapping[str, Any]) -> None:
             )
         for key in ("lr", "weight_decay"):
             if key not in gcfg:
-                raise ValueError(
-                    f"group {role!r} missing required field {key!r}"
-                )
+                raise ValueError(f"group {role!r} missing required field {key!r}")
 
     # scheduler
     sched = conf.get("scheduler")
@@ -227,14 +227,10 @@ def validate_optim_scheduler_conf(conf: Mapping[str, Any]) -> None:
     # warmup 必须有 warmup_steps
     if sched == "warmup":
         if "warmup_steps" not in sched_conf:
-            raise ValueError(
-                "scheduler=warmup requires scheduler_conf.warmup_steps"
-            )
+            raise ValueError("scheduler=warmup requires scheduler_conf.warmup_steps")
         ws = sched_conf["warmup_steps"]
         if not isinstance(ws, int) or isinstance(ws, bool) or ws <= 0:
-            raise ValueError(
-                f"warmup_steps must be a positive int, got {ws!r}"
-            )
+            raise ValueError(f"warmup_steps must be a positive int, got {ws!r}")
 
 
 # ============================================================
@@ -357,7 +353,11 @@ def init_optimizer_emo(model, conf: Mapping[str, Any]):
         n_params = sum(p.numel() for p in pg["params"])
         logging.info(
             "  %s: %d tensors, %d params, lr=%g, weight_decay=%g",
-            pg["name"], len(pg["params"]), n_params, pg["lr"], pg["weight_decay"],
+            pg["name"],
+            len(pg["params"]),
+            n_params,
+            pg["lr"],
+            pg["weight_decay"],
         )
     return optimizer
 
@@ -410,8 +410,13 @@ class EarlyStopTracker:
     都对同一 CV 集前向计算 loss，单 GPU 下天然一致。
     """
 
-    def __init__(self, metric: str = "loss_tts", min_delta: float = 0.0,
-                 patience: int = 0, min_epoch: int = 0):
+    def __init__(
+        self,
+        metric: str = "loss_tts",
+        min_delta: float = 0.0,
+        patience: int = 0,
+        min_epoch: int = 0,
+    ):
         self.metric = str(metric)
         self.min_delta = float(min_delta)
         self.patience = int(patience)
@@ -456,7 +461,7 @@ def build_early_stop_tracker(conf: Mapping[str, Any]):
             early_stop_metric: loss_tts     # 监控的 CV loss 键
             early_stop_min_delta: 0.001     # 容忍度
             early_stop_patience: 5          # 无改善耐心（epoch 数）
-            early_stop_min_epoch: 5         # 至少训满多少 epoch 才允许早停
+            early_stop_min_epoch: 3         # 至少训满多少 epoch 才允许早停
     """
     if not conf.get("early_stop"):
         return None
@@ -524,10 +529,7 @@ def summarize_optimizer_identity(
 
 def _model_state_dict(model):
     bare_model = _unwrap_model(model)
-    return {
-        key: value.detach().cpu()
-        for key, value in bare_model.state_dict().items()
-    }
+    return {key: value.detach().cpu() for key, value in bare_model.state_dict().items()}
 
 
 def save_latest_checkpoint(model, model_dir, epoch, step):
@@ -537,9 +539,7 @@ def save_latest_checkpoint(model, model_dir, epoch, step):
             return None
     os.makedirs(model_dir, exist_ok=True)
     latest_path = os.path.join(model_dir, "latest.pt")
-    temp_path = os.path.join(
-        model_dir, f".latest.{os.getpid()}.{id(model)}.tmp"
-    )
+    temp_path = os.path.join(model_dir, f".latest.{os.getpid()}.{id(model)}.tmp")
     payload = _model_state_dict(model)
     payload.update({"epoch": int(epoch), "step": int(step)})
     try:

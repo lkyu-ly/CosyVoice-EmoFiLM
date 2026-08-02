@@ -38,6 +38,11 @@ def setup_module():
 
 def test_eval_runs_and_outputs_valid_json():
     tmp = setup_module()
+    for name in ("smoke_zh.wav", "smoke_en.wav"):
+        if not os.path.isfile(f"/tmp/{name}"):
+            pytest.skip(
+                f"环境门控：缺少 /tmp/{name} 冒烟音频（外部资产，与主线逻辑无关）"
+            )
     ref = os.path.join(tmp, "ref")
     hyp = os.path.join(tmp, "hyp")
     out = os.path.join(tmp, "result.json")

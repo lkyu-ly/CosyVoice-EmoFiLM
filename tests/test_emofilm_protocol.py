@@ -1,22 +1,23 @@
 """EmoFiLM target-only 单流训练-推理协议 focused 测试（活跃主线，ADR-0020 扁平化）。
 
 覆盖（brief 04 §D / issue 04 checklist）：
-- 活跃模型无输入端 ``emotion_classifier``（v1 反模式已从活跃代码删除），
-  无 ``emo_loss_weight`` / ``criterion_emotion_cls``；
+- 活跃模型恒构造冻结的 input-end 探针 ``emotion_classifier``（``emo_loss_weight>0``
+  才计入 loss；默认 0 时 loss_dict 无 ``loss_emotion_input``）；
 - forward 恒定单流 ``[sos, FiLM(text), task, speech]``，
   target = ``[IGNORE] * (1 + text_len) + speech + [eos]``；
 - 无论 speech/text 比例如何均不产生 fill_token / 交错文本 / 双流状态
   （强制覆盖 speech/text > 3 的原双流触发比例）；
-- forward 仅产出 ``loss_tts``（无 emotion/intensity loss 字段）；
+- disabled（emo_loss_weight=0、无 span）forward 仅产出 ``loss_tts``；
 - inference 前缀 = ``[sos, FiLM(target text), task]``（训练前缀减去 teacher speech），
   LLM 条件只含 target text + emotion/intensity 控制；
 - inference 签名不接受 ``prompt_emotion_ids`` / ``prompt_intensity_ids`` /
   ``prompt_text``（死字段已删），保留 ``prompt_speech_token`` / ``embedding``
   透传给 Flow/HiFT（不进 LLM lm_input）；
-- ``conf/emo_film.yaml`` 无死配置字段（mix_ratio / emo_loss_weight / alpha），
+- ``conf/emo_film.yaml`` 无死配置字段（mix_ratio / alpha），
   实例化 ``Qwen2LM_Emotion``，base 仍指 CosyVoice2 llm.pt；
-- 反转语义锁：v1 反模式（``emotion_classifier`` / ``emo_loss_weight`` /
-  ``mix_ratio``）已从活跃代码删除（ADR-0020 禁源码哈希标定，改断言反模式不存在）。
+- 反转语义锁仅保留残余反模式（``mix_ratio`` / ``alpha`` 死字段）已删断言
+  （ADR-0020 禁源码哈希标定；``emotion_classifier`` / ``emo_loss_weight`` 现为
+  可选 input-end 句级监督，不再是反模式）。
 
 CPU fake-backbone 测试（仿 ``tests/test_emofilm_inference_contract.py:9-59``），
 无需 GPU / 真实权重。
@@ -37,7 +38,6 @@ from tests._emofilm_fakes import _FakeBackbone, _FakeHF, _FakeQwen
 from tools.build_emofilm_contract import DEAD_CONFIG_KEYS, assert_no_dead_config
 
 ROOT = Path(__file__).resolve().parent.parent
-ACTIVE_LLM_EMOTION_PATH = ROOT / "cosyvoice" / "llm" / "llm_emotion.py"
 ACTIVE_CONFIG_PATH = ROOT / "conf" / "emo_film.yaml"
 ACTIVE_MODEL_EMO_PATH = ROOT / "cosyvoice" / "cli" / "model_emo.py"
 
@@ -118,34 +118,6 @@ def _capture_target(model):
 
 
 # ============================================================
-# A. v2 不创建输入端 classifier
-# ============================================================
-
-
-def test_model_has_no_input_classifier():
-    model = _make_model()
-    assert not hasattr(model, "emotion_classifier"), (
-        "v2 must not create the input-side emotion_classifier "
-        "(v1 llm_emotion.py:54 is removed in v2)"
-    )
-    assert not hasattr(model, "emo_loss_weight"), (
-        "v2 must not carry emo_loss_weight (input-classifier CE removed)"
-    )
-    assert not hasattr(model, "criterion_emotion_cls")
-    # FiLM (emotion_encoder + emotion_adapter) 必须保留
-    assert hasattr(model, "emotion_encoder")
-    assert hasattr(model, "emotion_adapter")
-
-
-def test_init_rejects_dead_kwargs():
-    """v2 __init__ 不接受 mix_ratio / emo_loss_weight / alpha。"""
-    sig = inspect.signature(Qwen2LM_Emotion.__init__)
-    params = set(sig.parameters)
-    for dead in ("mix_ratio", "emo_loss_weight", "alpha"):
-        assert dead not in params, f"v2 __init__ must not accept dead kwarg {dead!r}"
-
-
-# ============================================================
 # B. forward 恒定单流、无 fill_token、仅 loss_tts
 # ============================================================
 
@@ -167,7 +139,7 @@ def test_forward_is_single_stream_and_no_fill_token():
 
     # forward 仅产出 loss_tts；无 emotion/intensity loss 字段
     assert "loss" in out and "loss_tts" in out
-    for forbidden in ("loss_emotion", "loss_intensity", "emotion_logits"):
+    for forbidden in ("loss_emotion_span", "loss_intensity", "loss_emotion_input"):
         assert forbidden not in out, f"forward must not emit {forbidden!r}"
     torch.testing.assert_close(out["loss"].detach(), out["loss_tts"])
 
@@ -368,11 +340,12 @@ def test_active_config_does_not_pass_dead_kwargs_to_llm():
     """活跃 llm 块不得把死字段作为 __init__ kwarg 传给 Qwen2LM_Emotion。
 
     用 hyperpyyaml 加载（惰性占位自定义 tag），只取顶层 resolved dict，避免
-    构造真实重模型；断言 llm 对象的构造 kwargs 不含死字段。
+    构造真实重模型；断言 llm 对象的构造 kwargs 不含死字段。``emo_loss_weight``
+    是可选活参数（input-end 句级监督权重），基线配置默认不传。
     """
     text = ACTIVE_CONFIG_PATH.read_text()
     llm_block = _extract_top_block(text, "llm")
-    for key in ("mix_ratio", "emo_loss_weight", "alpha"):
+    for key in ("mix_ratio", "alpha"):
         assert re.search(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*:", llm_block) is None, (
             f"active llm block must not pass dead kwarg {key!r}"
         )
@@ -387,22 +360,14 @@ def test_active_config_does_not_pass_dead_kwargs_to_llm():
 
 
 def test_v1_anti_patterns_removed_from_active_code():
-    """v1 反模式（输入端 classifier / emo_loss_weight / mix_ratio / 类名硬断言）
-    必须已从活跃代码删除。ADR-0020 禁源码哈希标定文件，改为断言反模式不存在。
-
-    v1 基线由 git 锚点 ``9c6d84b`` 保证，不由工作树字节哈希保证。
+    """残余 v1 反模式（mix_ratio / alpha 死字段 / cli 类名硬断言）必须已从活跃
+    代码删除。input-end ``emotion_classifier`` / ``emo_loss_weight`` 现为可选句级
+    监督（``emo_loss_weight>0`` 启用），不再是反模式。ADR-0020 禁源码哈希标定，
+    改为断言残余反模式不存在；v1 基线由 git 锚点 ``9c6d84b`` 保证。
     """
-    llm_src = ACTIVE_LLM_EMOTION_PATH.read_text(encoding="utf-8")
-    # 输入端 classifier 反模式已删（断言 v1 构造语句，注释中的历史引用不计）
-    assert "self.emotion_classifier = nn.Linear" not in llm_src, (
-        "v1 输入端 emotion_classifier 反模式必须从活跃 llm_emotion.py 删除"
-    )
-    assert "self.criterion_emotion_cls" not in llm_src
-    assert "self.emo_loss_weight" not in llm_src
-
     config_text = ACTIVE_CONFIG_PATH.read_text(encoding="utf-8")
     # 配置不得出现死键（任意缩进的 ``key:`` 形式）
-    for dead in ("emo_loss_weight", "mix_ratio", "alpha"):
+    for dead in ("mix_ratio", "alpha"):
         assert re.search(rf"(?m)^[ \t]*{re.escape(dead)}[ \t]*:", config_text) is None, (
             f"active config must not contain dead key {dead!r}"
         )

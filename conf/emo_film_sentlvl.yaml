@@ -1,12 +1,24 @@
+# === 句级情感监督实验配置（派生自 emo_film_earlystop.yaml，2026-08-02）===
+# 唯一差异：llm 块加 emo_loss_weight: 0.2（启用 input-end 句级情感监督）。
+# 机制：冻结的 emotion_classifier（Linear→emotion_vocab_size）作用在 FiLM 输出
+# modulated_text_emb 上，CrossEntropyLoss(ignore_index=0) 对 token 级 emotion_ids
+# （同句共享句级标签，padding=0 忽略）；梯度经冻结分类器回流 emotion_encoder/
+# emotion_adapter（FiLM）。详见 cosyvoice/llm/llm_emotion.py forward。
+# 其余与 emo_film_earlystop.yaml 逐字段一致（max_epoch=30 + 早停 + 同 optimizer
+# 三组 LR + 同 emofilm_v1 数据合同 + downstream_supervision=disabled）。早停监控
+# cv loss_tts（与 disabled 基线同口径），用于"加回句级监督能否突破 Emo-SIM~66
+# 平台"的四方对比（v1 / 5-epoch / 27-epoch / sentlvl）。
+# 基线配置 emo_film.yaml（disabled，推理共用）不传 emo_loss_weight，勿动。
+
 # Emo-FiLM 配置: target-only 单流协议（活跃主线权威，ADR-0020 扁平化）。
 #
 # 本配置是 EmoFiLM 的单一活跃配置权威。基于 CosyVoice2 派生，替换
 # llm/tokenizer/data_pipeline/train_conf。关键点：
 #   - llm: ``Qwen2LM_Emotion``。FiLM (emotion_encoder + emotion_adapter) +
 #     下游 emotion/arousal 监督任务头 + input-end 句级监督探针 emotion_classifier
-#     （恒构造、冻结；emo_loss_weight>0 才计入 loss，本基线配置默认 0=关闭）。
+#     （恒构造、冻结；emo_loss_weight>0 才计入 loss）。
 #   - 死配置字段仅剩：mix_ratio（双流）、顶层 alpha（配置占位；采样超参归属逐生成
-#     decode_config）。emo_loss_weight 是可选 input-end 句级监督权重，非死字段。
+#     decode_config）。emo_loss_weight 为可选 input-end 句级监督权重（默认 0=关闭）。
 #     → tools/build_emofilm_contract.py :: assert_no_dead_config 必须通过。
 #   - 训练协议恒定单流：SOS + FiLM(target text) + task + teacher-forced target
 #     speech；推理前缀 = SOS + FiLM(target text) + task。
@@ -69,12 +81,16 @@ llm: !new:cosyvoice.llm.llm_emotion.Qwen2LM_Emotion
     # 为中立起始值，**非审计最优**；正式实验由 optimizer 分组 + 调参决定。
     emotion_head_weight: 1.0
     intensity_head_weight: 1.0
-    # 下游监督开关（B1 静默→显式，ticket 02）。本次实验 = FiLM-only（不接 span
-    # 监督头），故 disabled：无 span batch 只算 loss_tts 且不静默——配置与运行
-    # 行为一致。若未来接通 span 数据链，改 enabled（无 span 将显式报错）。
+    # input-end 句级情感监督（可选，emo_loss_weight>0 计入 loss）：冻结分类器
+    # 恒构造，对 FiLM 输出做句级情感 CE，梯度回流 FiLM。=0（如 emo_film.yaml）
+    # 则不计入 loss。
+    emo_loss_weight: 0.2
+    # 下游监督开关（B1 静默→显式，ticket 02）。本次实验 = FiLM-only + 句级监督
+    # （不接 span 监督头），故 disabled。句级 loss_emotion 是 input-end 路径，
+    # 与 downstream span 词级监督是不同路径，不混淆。
     downstream_supervision: disabled
-# 不传 mix_ratio / alpha（死字段，assert_no_dead_config 拒绝）；emo_loss_weight
-# 默认 0=关闭（可选 input-end 句级监督）。
+# 不传 mix_ratio / alpha（死字段，assert_no_dead_config 拒绝）。emo_loss_weight
+# 现为可选 input-end 句级监督开关（默认 0=关闭；本实验 0.2 启用）。
 # base 仍指 CosyVoice2 llm.pt（Qwen2Encoder + llm.pt checkpoint）。
 
 flow: !new:cosyvoice.flow.flow.CausalMaskedDiffWithXvec
@@ -275,11 +291,19 @@ train_conf:
     scheduler: warmup
     scheduler_conf:
         warmup_steps: 250   # 工程占位；非 audit 最优
-    max_epoch: 5   # 论文对齐（学位论文表2-1 语音合成阶段=5 epoch）
+    max_epoch: 30   # 收敛实验上限（早停会在 plateau 后提前停，见 early_stop_*）
     grad_clip: 5
     accum_grad: 2
     log_interval: 100
     save_per_step: -1
+    # CV 早停 + 容忍度（train_utils_emo.EarlyStopTracker）。监控 cv loss_tts：
+    # 连续 patience 个 epoch 无突破 min_delta 的改善、且已训满 min_epoch → 停。
+    # 收口 restore-best（train_emo.py）使 final.pt = 收敛最优点。
+    early_stop: true
+    early_stop_metric: loss_tts
+    early_stop_min_delta: 0.001   # 容忍度：CV 改善 < best−0.001 才算突破
+    early_stop_patience: 5        # 连续 5 epoch 无突破改善 → 停
+    early_stop_min_epoch: 3       # 至少训满 3 epoch（对齐基线 floor）才允许早停
 
 # gan train conf
 train_conf_gan:

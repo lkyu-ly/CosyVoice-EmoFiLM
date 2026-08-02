@@ -38,7 +38,7 @@ def test_disabled_no_span_returns_tts_only():
     model = _make_model(downstream_supervision="disabled")
     out = model.forward(_base_batch(), torch.device("cpu"))
     assert "loss_tts" in out and out["loss_tts"] is not None
-    assert "loss_emotion" not in out
+    assert "loss_emotion_span" not in out
     assert "loss_intensity" not in out
 
 
@@ -54,5 +54,5 @@ def test_disabled_with_span_still_computes_heads():
     model = _make_model(downstream_supervision="disabled")
     batch = _add_one_span(_base_batch(), tok_start=1, tok_end=3)
     out = model.forward(batch, torch.device("cpu"))
-    assert "loss_emotion" in out
+    assert "loss_emotion_span" in out
     assert "loss_intensity" in out

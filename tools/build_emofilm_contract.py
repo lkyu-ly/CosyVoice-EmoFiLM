@@ -65,11 +65,13 @@ SPAN_GRANULARITIES = frozenset({"utterance", "span", "word"})
 
 # 死配置字段：有效 resolved 配置不得携带（ADR-0019）。
 #   - mix_ratio：双流交错文本/语音比例，v2 协议为单流 target-only，已删除。
-#   - emo_loss_weight：输入端 classifier CE 权重，v2 删除输入端 classifier。
 #   - alpha：v1 conf 中 ``alpha: 0.05  # 配置占位`` 是未参与计算的占位；
 #     采样超参（top_p / top_k / RAS alpha）属于逐生成 decode_config，
 #     不得出现在共享 resolved 配置顶层。
-DEAD_CONFIG_KEYS = frozenset({"mix_ratio", "emo_loss_weight", "alpha"})
+#   注：``emo_loss_weight`` 曾列死字段（v2 删除输入端 classifier 时加的门禁），
+#   现已恢复为可选 input-end 句级监督 CE 权重（``Qwen2LM_Emotion.emo_loss_weight``，
+#   作为 ``llm`` 构造参数消费，默认 ``0.0``=关闭），不再属顶层死字段。
+DEAD_CONFIG_KEYS = frozenset({"mix_ratio", "alpha"})
 
 # Generation row 身份引用键族（至少各满足其一）。
 SOURCE_IDENTITY_KEYS = ("source_revision", "source_patch_bundle", "source_patch_sha256")
@@ -342,11 +344,13 @@ def _is_relative_posix_path(value: Any) -> bool:
 
 
 def assert_no_dead_config(resolved_conf: Mapping[str, Any]) -> Mapping[str, Any]:
-    """拒绝 resolved 配置中的死配置字段（mix_ratio / emo_loss_weight / alpha）。
+    """拒绝 resolved 配置中的死配置字段（mix_ratio / alpha）。
 
-    单流协议删除双流 ``mix_ratio``；删除输入端 classifier 后
-    ``emo_loss_weight`` 无消费者；顶层 ``alpha`` 是 v1 遗留占位，采样超参
+    单流协议删除双流 ``mix_ratio``；顶层 ``alpha`` 是 v1 遗留占位，采样超参
     归属逐生成 ``decode_config``。任一出现 → ValueError。
+
+    注：``emo_loss_weight`` 不再是死字段——它现在是 ``Qwen2LM_Emotion`` 的可选
+    input-end 句级监督 CE 权重（作为 ``llm`` 构造参数消费，默认 ``0.0``=关闭）。
     """
     if not isinstance(resolved_conf, Mapping):
         raise ValueError("resolved config must be a mapping")
@@ -354,7 +358,7 @@ def assert_no_dead_config(resolved_conf: Mapping[str, Any]) -> Mapping[str, Any]
     if present:
         raise ValueError(
             f"dead config fields forbidden in {CONTRACT_NAME} resolved config: {present} "
-            "(mix_ratio=bistream removed; emo_loss_weight=input classifier removed; "
+            "(mix_ratio=bistream removed; "
             "alpha=top-level placeholder, sampling params belong in decode_config)"
         )
     return resolved_conf

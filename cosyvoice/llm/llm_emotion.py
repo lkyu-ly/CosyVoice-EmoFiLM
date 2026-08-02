@@ -15,13 +15,25 @@ git 基线锚点 ``9c6d84b``，不再于工作树维护并行副本。
   ``prompt_intensity`` 不进 LLM 条件；speaker / Flow / HiFT 的 prompt 条件
   （``prompt_speech_token`` / ``embedding``）保持透传给声学侧。
 
-反捷径设计：
+监督路径（两条，可叠加，loss 键名分离）：
 
-- **不创建**输入端 ``emotion_classifier``（v1 反模式已删）及其 CE
-  ``criterion_emotion_cls`` / ``emo_loss_weight``；本模块 loss 仅 ``loss_tts``
-  （无下游 span 监督时）或 ``loss_tts + w_e·loss_emotion + w_i·loss_intensity``
-  （有下游 span 监督时）。
-- ``__init__`` 不接受 ``mix_ratio`` / ``emo_loss_weight`` / ``alpha``。
+- **input-end 句级监督**（``emo_loss_weight>0`` 计入 loss，默认 ``0.0``=不计）：
+  ``emotion_classifier``（随机初始化 ``Linear(llm_input_size,
+  emotion_vocab_size)``，``requires_grad_(False)`` 恒冻结）**恒构造**，作用在
+  FiLM 输出 ``modulated_text_emb`` 上，``CrossEntropyLoss(ignore_index=0)`` 对
+  token 级 ``emotion_ids``（同句 token 共享句级标签，padding=0 自动忽略）。
+  梯度经冻结探针回流 ``emotion_encoder``/``emotion_adapter``（FiLM）。恒构造使
+  模型拓扑与 checkpoint schema 不随配置变化（训练/推理/基线同一 state_dict
+  键集）；推理不调用该探针。loss 键：``loss_emotion_input``。
+- **downstream span 词级监督**（``downstream_supervision='enabled'`` + span 数据）：
+  ``emotion_head``/``arousal_head`` 可训练，仅消费 ``lm_output`` 在 speech-token
+  span 区段上 masked-mean 池化的 feature（反捷径：辅助监督落在生成因果链下游，
+  不接收 control ID/loss target 作为特征）。loss 键：``loss_emotion_span`` /
+  ``loss_intensity``。
+
+无 span 且 ``emo_loss_weight==0`` 时 loss 仅 ``loss_tts``。
+- ``__init__`` 不接受 ``mix_ratio`` / ``alpha``（仍为死字段，
+  ``assert_no_dead_config`` 拒绝）。
 - **不复用** v1 ``prepare_lm_input_target``（含 bistream 分支），改用专用
   ``_prepare_target_only_input`` 恒定单流。
 - ``inference`` 签名不接受 ``prompt_emotion_ids`` / ``prompt_intensity_ids`` /
@@ -167,13 +179,18 @@ class Qwen2LM_Emotion(Qwen2LM):
     上 masked-mean 池化的 feature（``_pool_span_features``）—— 任务头不接收
     ``emotion_ids`` / ``intensity_ids`` / ``modulated_text_emb`` / loss target
     作为特征（反捷径：辅助监督落在生成因果链下游，消除输入端标签回读捷径）。
-    总 loss = ``loss_tts + w_e·loss_emotion + w_i·loss_intensity``（权重
+    总 loss = ``loss_tts + w_e·loss_emotion_span + w_i·loss_intensity``（权重
     ``emotion_head_weight`` / ``intensity_head_weight``）。emotion 用 soft CE
     （one-hot 特例即 hard CE）；intensity 用连续 arousal MSE；per-span
     ``emotion_mask`` / ``intensity_mask`` 独立门控；无效 span（``valid=False``）
     不贡献。
 
-    本类从不创建 ``emotion_classifier``（输入端反模式已从活跃代码删除）。
+    **input-end 句级监督**：``emotion_classifier``（随机初始化、冻结）恒构造，
+    ``emo_loss_weight>0`` 时对 FiLM 输出 ``modulated_text_emb`` 做句级情感 CE
+    （token 级 ``emotion_ids``，padding=0 由 ``ignore_index=0`` 忽略），梯度经
+    冻结探针回流 FiLM（``emotion_encoder``/``emotion_adapter``）。
+    ``emo_loss_weight==0``（默认）时不计入 loss（disabled 路径 loss 仅
+    ``loss_tts``，loss_dict 无 ``loss_emotion_input``）。
     """
 
     def __init__(
@@ -189,13 +206,14 @@ class Qwen2LM_Emotion(Qwen2LM):
         lsm_weight: float = 0.0,
         emotion_head_weight: float = 1.0,
         intensity_head_weight: float = 1.0,
+        emo_loss_weight: float = 0.0,
         downstream_supervision: str = "disabled",
     ):
         # 父类 ``Qwen2LM.__init__`` 仍接受 ``mix_ratio``（默认 [5,15]）。
         # 本类**永不读取** ``self.mix_ratio``（不调用 ``prepare_lm_input_target``），
         # 该属性仅作为父类遗留存在；resolved 配置不得出现 ``mix_ratio`` 键
-        # （``assert_no_dead_config`` 拒绝）。亦不接受 ``emo_loss_weight`` /
-        # ``alpha``（输入端 classifier 已删，alpha 为历史死占位）。
+        # （``assert_no_dead_config`` 拒绝）。亦不接受 ``alpha``（历史死占位）；
+        # ``emo_loss_weight`` 现为可选 input-end 句级监督开关（默认 ``0.0``=关闭）。
         super().__init__(
             llm_input_size=llm_input_size,
             llm_output_size=llm_output_size,
@@ -210,8 +228,19 @@ class Qwen2LM_Emotion(Qwen2LM):
             emotion_vocab_size, intensity_vocab_size, llm_input_size
         )
         self.emotion_adapter = FiLMLayer(llm_input_size)
-        # 不构造 self.emotion_classifier（输入端反模式已删），
-        # 不构造 criterion_emotion_cls / emo_loss_weight。
+
+        # input-end 句级情感监督探针（恒构造、冻结；emo_loss_weight>0 才计入
+        # loss）：emotion_classifier 随机初始化并 requires_grad_(False)，
+        # loss_emotion 梯度经固定读出器回流 FiLM（emotion_encoder /
+        # emotion_adapter）。恒构造使模型拓扑与 state_dict 键集不随配置变化
+        # （训练/推理/基线同一 schema），推理不调用该探针；emo_loss_weight==0
+        # 时仅不计入 loss。
+        self.emo_loss_weight = float(emo_loss_weight)
+        self.emotion_classifier = nn.Linear(
+            llm_input_size, emotion_vocab_size
+        )
+        self.emotion_classifier.requires_grad_(False)
+        self.criterion_emotion_cls = nn.CrossEntropyLoss(ignore_index=0)
 
         # ------------------------------------------------------------
         # 下游 speech-token 监督任务头
@@ -361,17 +390,18 @@ class Qwen2LM_Emotion(Qwen2LM):
         )
 
         # ------------------------------------------------------------
-        # 下游 head 附加点
+        # 监督组合点（两条路径可叠加；loss 键名分离）
         # ------------------------------------------------------------
         # ``lm_output`` 为最后一层 hidden (B, T, llm_output_size)；
         # speech-token 区段 = ``lm_target != IGNORE_ID`` 的列。
         # ``speech_token_mask`` 既标识 supervised 列，也作为池化的安全网
         # （排除 IGNORE/padding 列）。
         speech_token_mask = lm_target != IGNORE_ID  # (B, T) bool, True = supervised
+        loss = loss_tts
+        loss_dict = {"loss": loss, "acc": acc, "loss_tts": loss_tts.detach()}
 
-        # 下游监督任务头：batch 携带 span 张量时计算 head loss。无 span 时由
-        # ``downstream_supervision`` 显式裁决（B1 静默→显式：enabled 报错 /
-        # disabled 允许 FiLM-only），禁止静默降级。
+        # 1) 下游 span 词级监督（batch 携带 span 张量时计算；无 span 时由
+        #    downstream_supervision 显式裁决，禁止静默降级）。
         if _batch_has_spans(batch):
             spans = {
                 k: batch[k].to(device)
@@ -388,36 +418,36 @@ class Qwen2LM_Emotion(Qwen2LM):
                 spans["span_mask"],
                 spans["span_valid"],
             )
-            loss_emotion, loss_intensity = self._compute_downstream_losses(
+            loss_emotion_span, loss_intensity = self._compute_downstream_losses(
                 span_feature, spans
             )
             loss = (
-                loss_tts
-                + self.emotion_head_weight * loss_emotion
+                loss
+                + self.emotion_head_weight * loss_emotion_span
                 + self.intensity_head_weight * loss_intensity
             )
-            return {
-                "loss": loss,
-                "acc": acc,
-                "loss_tts": loss_tts.detach(),
-                "loss_emotion": loss_emotion.detach(),
-                "loss_intensity": loss_intensity.detach(),
-            }
-
-        # 无 span：由 downstream_supervision 显式裁决（禁止静默降级）。
-        if self.downstream_supervision == "enabled":
+            loss_dict["loss_emotion_span"] = loss_emotion_span.detach()
+            loss_dict["loss_intensity"] = loss_intensity.detach()
+        elif self.downstream_supervision == "enabled":
             raise RuntimeError(
                 "downstream_supervision='enabled' 但 batch 未携带 span 张量——"
                 "下游监督头未接入数据管线（span→parquet→batch 链断）。"
                 "若本次为 FiLM-only 实验，请在配置设 downstream_supervision='disabled'。"
             )
-        # disabled：显式允许的 FiLM-only 路径，只算 loss_tts
-        loss = loss_tts
-        return {
-            "loss": loss,
-            "acc": acc,
-            "loss_tts": loss_tts.detach(),
-        }
+
+        # 2) input-end 句级监督（emo_loss_weight>0 时计入；与 span 路径可叠加，
+        #    不再被 span 分支短路丢弃）。
+        if self.emo_loss_weight > 0:
+            emotion_logits = self.emotion_classifier(modulated_text_emb)
+            loss_emotion_input = self.criterion_emotion_cls(
+                emotion_logits.reshape(-1, emotion_logits.size(-1)),
+                emotion_ids.reshape(-1),
+            )
+            loss = loss + self.emo_loss_weight * loss_emotion_input
+            loss_dict["loss_emotion_input"] = loss_emotion_input.detach()
+
+        loss_dict["loss"] = loss
+        return loss_dict
 
     # ------------------------------------------------------------
     # 下游任务头：span 池化 + loss

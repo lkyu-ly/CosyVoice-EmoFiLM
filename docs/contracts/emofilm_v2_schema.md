@@ -24,9 +24,9 @@ v1 合同（`data/contracts/emofilm_v1/`、`tools/build_emofilm_contract.py`）�
 - **评测**：任一缺失 / 重复 / 非 EOS / 身份不一致 → 携 `utt_id` hard-fail，
   禁止跳过算部分均值。aggregate 只从已持久化 rows 确定性派生。FEDD-A
   （approximate）不进 FEDD-B（exact）aggregate。
-- **死配置**：v2 resolved 配置不得含 `mix_ratio`（双流）、`emo_loss_weight`
-  （输入端 classifier CE）、顶层 `alpha`（v1 配置占位；采样超参归属
-  `decode_config`）。
+- **死配置**：v2 resolved 配置不得含 `mix_ratio`（双流）、顶层 `alpha`（v1
+  配置占位；采样超参归属 `decode_config`）。`emo_loss_weight` 是可选 input-end
+  句级监督权重（默认 0=关闭），不属于死字段。
 
 ## 标签 id 空间（与 `cosyvoice/tokenizer/emo_tokenizer.py` 一致）
 
