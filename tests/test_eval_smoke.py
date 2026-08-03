@@ -33,11 +33,18 @@ def setup_module():
         if os.path.isfile(src):
             shutil.copy(src, os.path.join(ref_dir, name))
             shutil.copy(src, os.path.join(hyp_dir, name))
-    return tmp
+    # v3：--ref_text_manifest 必填，写一份最小 manifest 供冒烟使用
+    manifest = os.path.join(tmp, "manifest.jsonl")
+    with open(manifest, "w", encoding="utf-8") as f:
+        for name in ["smoke_zh.wav", "smoke_en.wav"]:
+            uid = os.path.splitext(name)[0]
+            f.write(json.dumps({"utt_id": uid, "text": "smoke text",
+                                "sentence_emotion": "neu"}) + "\n")
+    return tmp, manifest
 
 
 def test_eval_runs_and_outputs_valid_json():
-    tmp = setup_module()
+    tmp, manifest = setup_module()
     for name in ("smoke_zh.wav", "smoke_en.wav"):
         if not os.path.isfile(f"/tmp/{name}"):
             pytest.skip(
@@ -50,22 +57,22 @@ def test_eval_runs_and_outputs_valid_json():
     cmd = [
         EMOFILM_PY, EVAL_SCRIPT,
         f"--ref_dir={ref}", f"--hyp_dir={hyp}",
+        f"--ref_text_manifest={manifest}",
         f"--output={out}", "--device=cpu",
-        "--expected_count=2",  # v2: 复制了 smoke_zh.wav + smoke_en.wav
+        "--expected_count=2",  # 复制了 smoke_zh.wav + smoke_en.wav
     ]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=_offline_env())
     assert r.returncode == 0, r.stderr
     assert os.path.isfile(out)
     with open(out) as f:
         data = json.load(f)
-    # v2 九字段 schema
-    assert data["metric_contract_version"] == "emofilm-eval-v2"
-    for key in ("emo_sim", "dtw", "dtw_normalized", "dtw_euclidean",
-                "dtw_euclidean_normalized", "wer", "n_samples", "wer_percent"):
-        assert key in data, f"missing v2 field: {key}"
-    assert 0 <= data["emo_sim"] <= 100 + 1e-2  # cos sim 浮点误差容差（emo_sim=dot*100，归一化向量 dot 理论 ≤1.0）
-    assert data["dtw"] >= 0
-    assert data["dtw_euclidean"] >= 0
+    # v3 schema
+    assert data["metric_contract_version"] == "emofilm-eval-v3"
+    for key in ("emo_sim", "dtw_normalized", "wer", "wer_percent",
+                "n_samples", "per_emotion_emo_sim"):
+        assert key in data, f"missing v3 field: {key}"
+    assert 0 <= data["emo_sim"] <= 100 + 1e-2
+    assert data["dtw_normalized"] >= 0
     assert 0 <= data["wer"] <= 1.0
     assert data["wer_percent"] == pytest.approx(data["wer"] * 100.0)
     assert data["n_samples"] >= 1

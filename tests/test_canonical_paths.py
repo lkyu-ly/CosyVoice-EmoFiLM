@@ -28,7 +28,13 @@ def iter_active_paths():
         for path in (REPO_ROOT / relative_root).rglob("*"):
             if path.is_file() and path.suffix in TEXT_SUFFIXES:
                 yield path
-    yield from (REPO_ROOT / "docs").rglob("*.md")
+    # docs/ 下扫描规范项目文档（adr/contracts/reports 等），但跳过 superpowers
+    # 工作流的执行型工件（plans/specs）——它们天然含宿主绝对运行路径（cd/ckpt/环境
+    # 解释器），与活跃代码的「路径耦合」不是同一类问题，类同已排除的 worktrees。
+    for path in (REPO_ROOT / "docs").rglob("*.md"):
+        if "docs/superpowers" in path.relative_to(REPO_ROOT).as_posix():
+            continue
+        yield path
 
 
 def test_active_paths_do_not_reference_old_checkout_or_user_home():

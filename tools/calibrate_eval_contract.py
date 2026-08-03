@@ -140,7 +140,7 @@ def _check_identity_hard_fail(identity_metrics):
         )
         sys.exit(1)
 
-    dtw_keys = ("dtw", "dtw_normalized", "dtw_euclidean", "dtw_euclidean_normalized")
+    dtw_keys = ("dtw_normalized",)
     for key in dtw_keys:
         val = identity_metrics[key]
         if abs(val) > 1e-4:
@@ -162,10 +162,12 @@ def run_calibration(input_wav, output_dir, device, reference_text):
     # eval/ 加入 sys.path，使 from eval_emo_film import ... 在 CLI 独立运行时可用
     sys.path.insert(0, os.path.join(ROOT, "eval"))
 
-    from eval_emo_film import (
+    from emotion_metrics import (
         extract_frame_embeddings,
         compute_frame_mean_emo_sim,
-        compute_dtw_metrics,
+        compute_dtw_normalized,
+    )
+    from eval_emo_film import (
         compute_wer,
         normalize_text,
     )
@@ -214,7 +216,7 @@ def run_calibration(input_wav, output_dir, device, reference_text):
     for idx, name in enumerate(variant_names):
         hyp_feats = all_feats[idx + 1]
         emo_sim = compute_frame_mean_emo_sim(ref_feats, hyp_feats)
-        dtw_metrics = compute_dtw_metrics(ref_feats, hyp_feats)
+        dtw_normalized = compute_dtw_normalized(ref_feats, hyp_feats)
 
         # WER: --reference_text vs Whisper 转写变体音频
         hyp_text = compute_wer(whisper_model, variant_paths[name])
@@ -225,7 +227,7 @@ def run_calibration(input_wav, output_dir, device, reference_text):
 
         results[name] = {
             "emo_sim": emo_sim,
-            **dtw_metrics,
+            "dtw_normalized": dtw_normalized,
             "wer": float(wer_value),
             "hyp_text": hyp_text,
         }

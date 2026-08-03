@@ -71,7 +71,7 @@ done
 
 ## 评测入口
 
-正式评测使用 `eval/eval_emo_film.py`。`exp/emofilm_v1/eval_refs/` 是不纳入迁移的可重建视图；运行前须按对应合同 manifest 的 `utt_id` 与 `reference_wav` 重建同名引用 WAV/符号链接。例如 ESD：
+正式评测使用 `eval/eval_emo_film.py`（v3 契约 `emofilm-eval-v3`，纯指标在 `eval/emotion_metrics.py`）。`exp/emofilm_v1/eval_refs/` 是不纳入迁移的可重建视图；运行前须按对应合同 manifest 的 `utt_id` 与 `reference_wav` 重建同名引用 WAV/符号链接。例如 ESD：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 MODELSCOPE_OFFLINE=1 PYTHONPATH=.:third_party/Matcha-TTS \
@@ -79,8 +79,11 @@ python eval/eval_emo_film.py \
   --ref_dir exp/emofilm_v1/eval_refs/esd \
   --hyp_dir exp/emofilm_v1/full/esd \
   --ref_text_manifest data/contracts/emofilm_v1/eval/esd/manifest.jsonl \
-  --output exp/emofilm_v1/eval/esd_metrics.json \
+  --emotion_ref_manifest data/contracts/emofilm_v1/sources/esd/manifest.jsonl \
+  --output exp/emofilm_v1/eval/v3/esd_metrics.json \
   --device cuda --expected_count 1500 --batch_size 16
 ```
+
+输出 v3 schema：`metric_contract_version / n_samples / emo_sim / dtw_normalized / wer / wer_percent / per_emotion_emo_sim`，提供 `--emotion_ref_manifest` 时额外输出 `discriminability`（n-way nearest-ref 情感判别）。详见 `docs/contracts/emofilm_v3_eval.md`。v3 输出建议写入 `eval/v3/`，历史 `eval/*_metrics.json`（v2 九字段）保留不覆盖。
 
 已完成基线的命令、identity、合并 manifest、metrics、比较结果和实验报告见 `artifacts/emofilm_v1/`；完整 checkpoint、WAV 与日志见 `exp/emofilm_v1/`。
