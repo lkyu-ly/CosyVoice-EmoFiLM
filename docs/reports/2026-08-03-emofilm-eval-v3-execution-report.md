@@ -129,7 +129,7 @@ CV3 per-emotion：neu 91.7 / ang 71.1 / hap 65.9 / sad 66.1 / sur 59.0。
 
 ### 4.6 `test_canonical_paths.py` 排除 `docs/superpowers/`
 
-全 docs/ 仅计划文件含 `/home/hanlvyuan/`（执行型工件，含宿主绝对运行路径），且该失败先于本次代码改动。扫描跳过 superpowers 工作流子树（与已排除的 worktrees 同类），不弱化对 adr/contracts/reports 等规范文档的守卫。
+全 docs/ 仅计划文件含宿主绝对路径（执行型工件，含运行路径），且该失败先于本次代码改动。扫描跳过 superpowers 工作流子树（与已排除的 worktrees 同类），不弱化对 adr/contracts/reports 等规范文档的守卫。
 
 ### 4.7 `test_emotion_metrics.py` 自带 `sys.path.insert`
 

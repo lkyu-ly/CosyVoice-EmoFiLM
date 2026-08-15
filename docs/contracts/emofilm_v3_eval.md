@@ -18,7 +18,7 @@
 | `dtw_normalized` | cosine fastdtw 按路径长度归一化 |
 | `wer` / `wer_percent` | WER 比例 / 展示百分比（GT 文本 vs hyp 转写） |
 | `per_emotion_emo_sim` | 按 emotion 分组的 emo_sim 均值 |
-| `discriminability`（可选） | n-way 判别：n_valid / n_way_avg / nearest_ref_acc_pct / same_emotion_mean / cross_emotion_mean / gap_same_minus_cross / n_way_distribution / mean_sim_by_ref_emotion |
+| `discriminability`（可选） | n-way 判别：n_valid / n_skipped / n_scored / n_way_avg / nearest_ref_acc_pct / same_emotion_mean / cross_emotion_mean / gap_same_minus_cross / n_way_distribution / mean_sim_by_ref_emotion。目标情感参考 = eval manifest 的 reference_wav，其他情感参考 = sources 索引；候选 >=3 才计入（ESD eval 集 1422/1500 可算，78 条跳过）。 |
 
 ## 破坏性变更（相对 v2）
 
@@ -28,9 +28,8 @@
 
 ## 判别指标口径
 
-- `--emotion_ref_manifest` 指向 sources 级 jsonl（需含 speaker_id / text / sentence_emotion / wav_path）。
-- 对每条 hyp，用同 (speaker_id, text) 的其他情感参考做嵌入余弦；参考情感数 ≥ 3 才计入 `n_valid`，否则计入 `n_skipped`（诚实口径，不失败）。
-- ESD 全集有完整 5 情感组 → 5-way；ESD eval 集（1500）最多 4 情感 → n-way 为 3/4；FEDD 无同文本跨情感参考 → `n_valid=0`。
-- **重要退化**：ESD 的 train/eval 划分把每个 (speaker, text) 组的**目标情感单独留到 eval**，sources 参考恰好缺该情感 →
-  eval 集上每行的目标情感都不在参考中，`n_scored=0`，nearest-ref 准确率 / gap **结构上不可计算**（返回 `reason`，不写 NaN / 不报误导性 0%）。
-  因此判别指标只在**完整 5 情感组集合**（如 `esd_prompt_match_60` 验证集）上有意义；eval 集上应视为 N/A。
+- `--emotion_ref_manifest` 指向 sources 级 jsonl（需含 speaker_id / text / sentence_emotion / wav_path），提供"其他情感"参考。
+- 目标情感参考来自 eval manifest 的 `reference_wav` 字段（绝对路径）；`compute_discriminability` 内部按 (speaker_id, text) 合并 sources 索引与 reference_wav，使候选包含"正确答案"。
+- 候选情感数 ≥ 3 才计入 `n_valid`，否则计入 `n_skipped`（诚实口径，不失败）；所有返回分支统一 schema，不可算时返回 `reason`，不写 NaN / 不报误导性 0%。
+- same_emotion_mean / cross_emotion_mean / gap / mean_sim_by_ref_emotion 为**原始余弦**（与 emo_sim ×100 不同）；nearest_ref_acc_pct 为百分比。
+- ESD eval 集（1500）合并 reference_wav 后 1422 条候选 ≥3（5/4/3-way 混合），78 条跳过；FEDD_A 无同文本跨情感参考 → `n_scored=0`（诚实口径，返回 reason），FEDD_B 部分组可判别 → `n_scored=427`（4-way×264 / 3-way×163，73 条跳过）。

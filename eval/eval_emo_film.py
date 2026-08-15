@@ -67,7 +67,7 @@ def pair_wavs_strict(ref_dir, hyp_dir, expected_count=None):
 
 
 def load_manifest(path):
-    """读 jsonl manifest，返回 {utt_id: {"text","speaker_id","emotion"}}。"""
+    """读 jsonl manifest，返回 {utt_id: {"text","speaker_id","emotion","reference_wav"}}。"""
     mapping = {}
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -81,6 +81,8 @@ def load_manifest(path):
             mapping[uid] = {
                 "text": rec.get("text") or "",
                 "speaker_id": rec.get("speaker_id"),
+                "reference_wav": (os.path.abspath(rec["reference_wav"])
+                                  if rec.get("reference_wav") else None),
                 "emotion": (rec.get("sentence_emotion")
                             or rec.get("label") or rec.get("emo_to")),
             }

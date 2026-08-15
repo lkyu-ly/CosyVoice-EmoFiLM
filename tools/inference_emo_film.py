@@ -9,10 +9,10 @@ text 逻辑兼容 Stage 2 tagged jsonl schema（text=tagged <emotion>，plain_te
 用法:
   CUDA_VISIBLE_DEVICES=0 python tools/inference_emo_film.py \\
     --model_dir pretrained_models/CosyVoice2-0.5B \\
-    --llm_ckpt exp/emofilm_v1/final.pt \\
+    --llm_ckpt exp/emofilm_film_only_longepoch/final.pt \\
     --test_manifest data/contracts/emofilm_v1/eval/esd/manifest.jsonl \\
     --esd_root datasets/ESD \\
-    --output_dir exp/emofilm_v1/wav_esd \\
+    --output_dir exp/emofilm_film_only_longepoch/wav_esd \\
     --device cuda
 
 产物: {output_dir}/{utt_id}.wav + inference_manifest.jsonl

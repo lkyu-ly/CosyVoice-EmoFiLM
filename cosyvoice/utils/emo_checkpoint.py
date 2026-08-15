@@ -29,10 +29,11 @@ ALLOWED_MISSING_PREFIXES = (
 )
 
 #: trained checkpoint 加载时允许缺失的顶层模块前缀（模型有、旧 ckpt 无）。
-#: ``emotion_classifier.`` 为 input-end 句级监督探针（恒构造、冻结、推理不调用）；
-#: 旧 disabled 基线 ckpt 不包含它，加载时随机初始化即可（冻结随机权重对推理零
-#: 影响）。刻意不含 ``emotion_head.`` / ``arousal_head.`` —— v1 旧制品缺任务头
-#: 必须在 trained 加载时失败（防冒充当前训练产物）。
+#: 仅 ``emotion_classifier.``：27-epoch disabled 基线（film_only_longepoch）的
+#: final.pt 在冻结探针恒构造重构之前训练，不含该键；加载时随机初始化即可
+#: （冻结随机权重对推理零影响）。sentlvl 及未来 ckpt 均应含该键。
+#: 刻意不含 ``emotion_head.`` / ``arousal_head.`` —— v1 旧制品缺任务头
+#: 必须在 trained 加载时失败（防冒充当前训练产物，ADR-0019/0020）。
 TRAINED_ALLOWED_MISSING_PREFIXES = (
     "emotion_classifier.",
 )

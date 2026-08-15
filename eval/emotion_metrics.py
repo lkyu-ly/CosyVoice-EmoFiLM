@@ -168,106 +168,103 @@ def build_emotion_ref_index(manifest_path):
     return index
 
 
+EMOTIONS = ["ang", "hap", "neu", "sad", "sur"]
+
+
+def _merged_refs(ref_index, row):
+    """合并 sources 索引与 eval 行自带 reference_wav（目标情感参考）。
+
+    ESD train/eval 划分会把 (speaker, text) 组的目标情感单独留到 eval，sources
+    索引缺目标情感；reference_wav 是目标情感真实音频，合并后判别候选才包含
+    "正确答案"。返回 {emotion: wav_path}；reference_wav 存在则覆盖目标情感。
+    """
+    target = (row.get("emotion") or row.get("sentence_emotion")
+              or row.get("label"))
+    refs = dict(ref_index.get(
+        (row.get("speaker_id"), (row.get("text") or "").lower()), {}))
+    rw = row.get("reference_wav")
+    if target and rw:
+        refs[target] = rw
+    return refs
+
+
 def compute_discriminability(hyp_paths, eval_rows, ref_index, emo_model,
                              batch_size=16):
     """对每条 hyp 计算与可用情感参考的余弦，输出 n-way 判别指标。
 
-    前置契约：eval_rows 必须与 hyp_paths 按 utt_id 对齐（由调用方保证，
-    见 run_evaluation 的重排）。
-    返回 dict：n_valid（参考数>=3 的样本数）、n_skipped（参考不足被跳过的样本数）、
-    n_way_avg、nearest_ref_acc_pct、same_emotion_mean / cross_emotion_mean /
-    gap_same_minus_cross、n_way_distribution、mean_sim_by_ref_emotion。
-    参考不足（n<3）的样本计入 n_skipped，不硬性失败（诚实口径）。
+    前置契约：eval_rows 必须与 hyp_paths 按 utt_id 对齐（由调用方保证）。
+    流程：合并参考 → 过滤候选>=3 → 批量提取嵌入 → 单遍判别 → 聚合。
+    所有返回分支使用同一 schema；不可算时 reason 说明原因，不写 NaN。
     """
-    emotions = ["ang", "hap", "neu", "sad", "sur"]
-    path_set = set()
+    # 1) 预处理：每行合并参考并过滤候选 >=3
+    refs_by_idx = {}
     for i, row in enumerate(eval_rows):
-        key = (row.get("speaker_id"), (row.get("text") or "").lower())
-        refs = ref_index.get(key, {})
-        if len(refs) < 3:
-            continue
-        for emo in emotions:
-            p = refs.get(emo) or refs.get(
-                row.get("emotion") or row.get("sentence_emotion") or row.get("label"))
-            if p:
-                path_set.add(p)
-    if not path_set:
-        return {"n_valid": 0, "reason": "no reference groups with >=3 emotions"}
+        refs = _merged_refs(ref_index, row)
+        if len(refs) >= 3:
+            refs_by_idx[i] = refs
+    if not refs_by_idx:
+        return {
+            "n_valid": 0, "n_skipped": len(eval_rows), "n_scored": 0,
+            "n_way_avg": 0.0, "n_way_distribution": {},
+            "nearest_ref_acc_pct": 0.0, "same_emotion_mean": None,
+            "cross_emotion_mean": None, "gap_same_minus_cross": None,
+            "mean_sim_by_ref_emotion": {},
+            "reason": "no reference groups with >=3 emotions",
+        }
 
-    ref_embs = extract_utt_embeddings(emo_model, sorted(path_set), batch_size)
-    ref_emb_by_path = dict(zip(sorted(path_set), ref_embs))
+    # 2) 批量提取参考嵌入（路径去重后一次提取）
+    ref_paths = sorted({p for refs in refs_by_idx.values() for p in refs.values()})
+    ref_embs = extract_utt_embeddings(emo_model, ref_paths, batch_size)
+    ref_emb_by_path = dict(zip(ref_paths, ref_embs))
     hyp_embs = extract_utt_embeddings(emo_model, hyp_paths, batch_size)
 
-    sims = {}  # row_idx -> {emotion: sim}
-    for i, row in enumerate(eval_rows):
-        key = (row.get("speaker_id"), (row.get("text") or "").lower())
-        refs = ref_index.get(key, {})
-        if len(refs) < 3:
-            continue
-        valid = [e for e in emotions if e in refs]
-        row_sims = {}
-        for e in valid:
-            row_sims[e] = float(np.dot(hyp_embs[i], ref_emb_by_path[refs[e]]))
-        sims[i] = row_sims
-
-    valid_idx = list(sims.keys())
-    n = len(valid_idx)
-    if n == 0:
-        return {"n_valid": 0, "reason": "no samples with usable references"}
-
-    same_vals = []  # 目标情感参考相似度（仅 target 在参考中的行）
-    cross = []
-    acc = 0.0
-    n_scored = 0
+    # 3) 单遍判别聚合
     n_way_counts = {}
-    for i in valid_idx:
+    acc = n_scored = 0
+    same_vals, cross_vals = [], []
+    for i, refs in refs_by_idx.items():
         target = (eval_rows[i].get("emotion") or eval_rows[i].get("sentence_emotion")
                   or eval_rows[i].get("label"))
-        candidates = {e: s for e, s in sims[i].items()}
-        if target not in candidates:
+        if target not in refs:
             continue
+        sims = {e: float(np.dot(hyp_embs[i], ref_emb_by_path[p]))
+                for e, p in refs.items()}
         n_scored += 1
-        acc += int(max(candidates, key=candidates.get) == target)
-        same_vals.append(candidates[target])
-        n_way = len(candidates)
+        n_way = len(sims)
         n_way_counts[str(n_way)] = n_way_counts.get(str(n_way), 0) + 1
-        cross += [s for e, s in candidates.items() if e != target]
+        acc += int(max(sims, key=sims.get) == target)
+        same_vals.append(sims[target])
+        cross_vals += [s for e, s in sims.items() if e != target]
     if n_scored == 0:
-        # 退化：无任何样本的目标情感在可用参考中。ESD train/eval 划分会把每组的
-        # 目标情感单独留到 eval，sources 参考恰好缺该情感 → nearest-ref acc/gap
-        # 结构上不可计算。诚实返回 reason，不写 NaN、不报误导性 0%。
         return {
-            "n_valid": n,
-            "n_skipped": len(eval_rows) - n,
-            "n_scored": 0,
-            "n_way_distribution": {},
-            "reason": "target emotion absent from all reference groups "
-                      "(eval/train split excludes target; use full 5-emotion groups for discriminability)",
+            "n_valid": len(refs_by_idx),
+            "n_skipped": len(eval_rows) - len(refs_by_idx),
+            "n_scored": 0, "n_way_avg": 0.0, "n_way_distribution": {},
+            "nearest_ref_acc_pct": 0.0, "same_emotion_mean": None,
+            "cross_emotion_mean": None, "gap_same_minus_cross": None,
+            "mean_sim_by_ref_emotion": {},
+            "reason": "target emotion absent from merged references",
         }
-    acc_pct = acc / n_scored * 100.0
-    # mean_sim_by_ref_emotion：仅收录至少在一个可用参考组中出现的情感，
-    # 避免对缺失情感写入非法 NaN（诚实口径：无参考 → 不报告该情感）。
-    present_emotions = {e for i in valid_idx for e in sims[i]}
-    mean_sim_by_emo = {}
-    for e in emotions:
-        if e not in present_emotions:
-            continue
-        vals = [sims[i].get(e, np.nan) for i in valid_idx]
-        mean_sim_by_emo[e] = float(np.nanmean(vals))
+
+    present = {e for refs in refs_by_idx.values() for e in refs}
+    mean_sim_by_emo = {
+        e: float(np.mean([np.dot(hyp_embs[i], ref_emb_by_path[refs[e]])
+                          for i, refs in refs_by_idx.items() if e in refs]))
+        for e in EMOTIONS if e in present
+    }
     return {
-        "n_valid": n,
-        "n_skipped": len(eval_rows) - n,
+        "n_valid": len(refs_by_idx),
+        "n_skipped": len(eval_rows) - len(refs_by_idx),
         "n_scored": n_scored,
         "n_way_avg": float(sum(int(k) * v for k, v in n_way_counts.items())
                            / sum(n_way_counts.values())),
         "n_way_distribution": n_way_counts,
-        "nearest_ref_acc_pct": round(acc_pct, 2),
+        "nearest_ref_acc_pct": round(acc / n_scored * 100.0, 2),
         "same_emotion_mean": round(float(np.mean(same_vals)), 2),
-        "cross_emotion_mean": round(float(np.mean(cross)), 2),
-        "gap_same_minus_cross": round(float(np.mean(same_vals) - np.mean(cross)), 2),
-        "mean_sim_by_ref_emotion": {
-            e: round(mean_sim_by_emo[e], 2) for e in emotions if e in mean_sim_by_emo
-        },
+        "cross_emotion_mean": round(float(np.mean(cross_vals)), 2),
+        "gap_same_minus_cross": round(
+            float(np.mean(same_vals) - np.mean(cross_vals)), 2),
+        "mean_sim_by_ref_emotion": mean_sim_by_emo,
     }
 
 
